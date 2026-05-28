@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - "feature/**"
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      AI_PROVIDER: mock
+      VECTOR_STORE: memory
+      METADATA_STORE: memory
+      USE_S3: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Run pytest
+        run: pytest -q
+
+  docker-test:
+    runs-on: ubuntu-latest
+    env:
+      AI_PROVIDER: mock
+      VECTOR_STORE: memory
+      METADATA_STORE: memory
+      USE_S3: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Docker Compose test flow
+        run: docker compose run --rm test

@@ -1,0 +1,5 @@
+Employee travel reimbursement policy.
+
+All claims must be submitted within 30 days after the trip.
+Receipts are mandatory for expenses above 500 THB.
+Finance reviews every claim before payout.
