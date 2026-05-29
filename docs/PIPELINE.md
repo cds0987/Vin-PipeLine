@@ -1,545 +1,427 @@
-# Vin-PipeLine — Tài liệu Kiến trúc & Pipeline
+# Pipeline — Implementation Reference
 
-## Tổng quan
+Tài liệu này mô tả chi tiết implementation: từng bước pipeline, API contracts, database schema, env vars. Để hiểu tại sao system thiết kế thế này → đọc `ARCHITECTURE.md`. Rules cứng → `AGENTS.md`.
 
-Vin-PipeLine là hệ thống **Document Ingestion & Vector Search** được xây dựng theo mô hình RAG (Retrieval-Augmented Generation). Hệ thống nhận tài liệu từ nhiều nguồn, xử lý qua pipeline 5 bước, lưu vector vào Qdrant và metadata vào PostgreSQL, sau đó phục vụ tìm kiếm ngữ nghĩa qua REST API.
+## Luồng end-to-end
 
----
-
-## Kiến trúc hệ thống
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        INGESTION SOURCES                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │  Kafka Topic │  │  S3 Scanner  │  │  REST API /scan      │  │
-│  │  DocumentUp- │  │  (background │  │  (manual trigger)    │  │
-│  │  loaded      │  │   polling)   │  │                      │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────┘  │
-└─────────┼─────────────────┼───────────────────────┼─────────────┘
-          │                 │                       │
-          └─────────────────┴───────────────────────┘
-                                    │
-                                    ▼
-┌───────────────────────────────────────────────────────────────────┐
-│                     INGESTION PIPELINE (run.py)                   │
-│                                                                   │
-│  01_parse ──► 02_clean ──► 03_chunk ──► 04_embed ──► 05_index    │
-│                                                                   │
-└──────────────────────────────┬────────────────────────────────────┘
-                               │
-               ┌───────────────┴───────────────┐
-               ▼                               ▼
-      ┌─────────────────┐            ┌──────────────────┐
-      │  Qdrant          │            │  PostgreSQL       │
-      │  (Vector Store)  │            │  (Metadata Store) │
-      └────────┬────────┘            └────────┬─────────┘
-               └───────────────┬──────────────┘
-                               ▼
-                   ┌───────────────────────┐
-                   │  REST API /search     │
-                   │  (RetrievalService)   │
-                   └───────────────────────┘
+```text
+S3 bucket
+    │
+    ▼
+S3 scanner (poll theo SCAN_INTERVAL_SECONDS)
+    │  phát hiện file mới / thay đổi / failed / stale
+    ▼
+IngestJob
+    │
+    ▼
+pipeline.run(job)
+    │
+    ├─> 01_parse
+    ├─> 02_clean
+    ├─> 03_chunk
+    ├─> 04_embed
+    └─> 05_index
+              │
+    ┌─────────┴─────────┐
+    ▼                   ▼
+Vector store       Metadata store
+              │
+              ▼
+    RetrievalService
+              │
+              ▼
+        POST /search  ──> caller
 ```
 
----
+## Lớp kiến trúc
 
-## Pipeline Ingestion — 5 Bước
+1. **S3 scanner**: nguồn duy nhất đưa tài liệu vào
+2. **Ingestion pipeline**: `01_parse` → `02_clean` → `03_chunk` → `04_embed` → `05_index`
+3. **Storage layer**: vector store + metadata store
+4. **Serving layer**: FastAPI — `search`, `scan`, `status`, `health`
 
-### Bước 1 · Parse (`pipeline/01_parse.py`)
+## S3 scanner
 
-Đọc file từ URI (local hoặc S3) và trích xuất text thô thành danh sách `(page_number, text)`.
+`adapters/s3_adapter.py` quét bucket theo `SCAN_PREFIX`.
 
-| Định dạng | Thư viện | Ghi chú |
-|-----------|----------|---------|
-| `.pdf` | `pypdf` + `fitz` (PyMuPDF) | Text-layer trước; fallback OCR qua vision model nếu trang trống |
-| `.docx` | `python-docx` | Ghép tất cả paragraph |
-| `.txt`, `.md` | built-in | UTF-8 decode |
-| `.html`, `.htm` | `html.parser` | Strip tags, giữ text nodes |
-| `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff` | AIProvider.ocr() | Gọi vision model (GPT-4o mặc định) |
+Scanner tạo `IngestJob` khi:
 
-**Input:** `IngestJob` (doc_id, file_uri, language, document_type)
-**Output:** `list[tuple[int, str]]` — danh sách (page_num, text)
+- file chưa có trong metadata store
+- file đang `failed` hoặc `pending`
+- file `indexing` nhưng đã stale (vượt `STALE_INDEXING_SECONDS`)
+- `s3_last_modified` trên S3 mới hơn bản đã lưu
 
-**OCR fallback chain cho PDF:**
-1. `pypdf` extract text
-2. Nếu trang trống → render page thành PNG bằng PyMuPDF → gửi lên vision model
-3. Nếu PyMuPDF không có → OCR từng ảnh nhúng trong trang
+Scanner bỏ qua:
 
----
+- file suffix không được hỗ trợ
+- file đang indexing và chưa stale
+- file đã indexed và không thay đổi
 
-### Bước 2 · Clean (`pipeline/02_clean.py`)
+`/scan` trong REST API trigger cùng logic này theo yêu cầu thủ công — không phải luồng vào độc lập.
 
-Chuẩn hóa text, loại bỏ nhiễu whitespace.
+## 5 bước pipeline
 
-Các phép biến đổi (theo thứ tự):
-1. `\r\n` và `\r` → `\n`
-2. Nhiều space/tab liên tiếp → 1 space
-3. Hơn 2 dòng trống liên tiếp → 1 dòng trống
-4. `.strip()` toàn bộ
-5. Drop trang nếu sau khi clean text rỗng
+### 1. Parse
 
-**Input:** `list[tuple[int, str]]`
-**Output:** `list[tuple[int, str]]` — đã lọc trang rỗng
+`pipeline/01_parse.py`
 
----
+Input: `IngestJob` + `file_bytes: bytes`
+Output: `list[tuple[int, str]]`
 
-### Bước 3 · Chunk (`pipeline/03_chunk.py`)
+Boundary:
 
-Chia text thành các đoạn nhỏ (chunk) theo cửa sổ trượt (sliding window) ở mức **BPE token**.
+- `01_parse.py` chỉ biết `bytes + suffix -> pages`
+- IO đọc file nằm ở `pipeline/run.py` qua `read_binary(job.file_uri)`
+- parse stage không biết file đến từ local path, S3 hay backend storage nào khác
 
-**Cấu hình:**
+Định dạng hỗ trợ:
 
-| Tham số | Biến env | Mặc định |
-|---------|----------|----------|
-| Kích thước chunk | `CHUNK_SIZE` | 512 token |
-| Overlap giữa các chunk | `CHUNK_OVERLAP` | 64 token |
+- `.pdf`
+- `.docx`
+- `.txt`
+- `.md`
+- `.html`, `.htm`
+- `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`
 
-**Thuật toán:**
-- Tokenizer: `tiktoken` với model `text-embedding-3-small` (fallback về word-split nếu thiếu thư viện)
-- Build token→page map để biết mỗi chunk thuộc trang nào
-- Mỗi chunk bước `step = chunk_size - overlap` token
-- Gán `page_start` / `page_end` từ token map
+Chi tiết:
 
-**Chunk ID format:** `{doc_id}_chunk_{index:04d}`
+- PDF: ưu tiên text layer qua `pypdf`
+- trang PDF rỗng: fallback OCR bằng vision model
+- image files: OCR trực tiếp qua `AIProvider.ocr()`
 
-**Metadata mỗi chunk:**
+### 2. Clean
+
+`pipeline/02_clean.py`
+
+Input: `list[tuple[int, str]]`
+Output: `list[tuple[int, str]]`
+
+Xử lý chính:
+
+- chuẩn hóa line endings
+- collapse khoảng trắng dư
+- giảm số dòng trống liên tiếp
+- loại trang rỗng sau khi clean
+
+### 3. Chunk
+
+`pipeline/03_chunk.py`
+
+Input: clean pages + `IngestJob`
+Output: `list[ChunkResult]`
+
+Mặc định:
+
+- `CHUNK_SIZE=512`
+- `CHUNK_OVERLAP=64`
+
+Chunk metadata bao gồm:
+
+- `chunk_index`
+- `chunk_strategy`
+- `language`
+- `document_type`
+- `token_start`
+- `token_end`
+
+Chunk id format: `{doc_id}_chunk_{index:04d}`
+
+### 4. Embed
+
+`pipeline/04_embed.py`
+
+Input: `list[ChunkResult]`
+Output: `list[ChunkResult]` đã có `embedding`
+
+Runtime:
+
+- gọi `AIProvider.embed()`
+- xử lý theo batch
+- ghi `embedding_model` vào metadata từng chunk
+
+### 5. Index
+
+`pipeline/05_index.py`
+
+Input: chunks + job + stores
+Output:
+
 ```json
 {
-  "chunk_index": 0,
-  "chunk_strategy": "sliding_window",
-  "language": "vi",
-  "document_type": "general",
-  "token_start": 0,
-  "token_end": 512
-}
-```
-
-**Input:** `list[tuple[int, str]]`, `IngestJob`
-**Output:** `list[ChunkResult]`
-
----
-
-### Bước 4 · Embed (`pipeline/04_embed.py`)
-
-Gọi embedding API để vector hóa nội dung từng chunk.
-
-- Xử lý theo batch (mặc định `batch_size=32`) để tránh quá tải API
-- Ghi `chunk.embedding: list[float]` và `metadata["embedding_model"]`
-
-**Model mặc định:** `text-embedding-3-small` (OpenAI, dim=1536)
-
-**Input:** `list[ChunkResult]`
-**Output:** `list[ChunkResult]` — đã có `embedding` field
-
----
-
-### Bước 5 · Index (`pipeline/05_index.py`)
-
-Ghi dữ liệu vào hai store và cập nhật trạng thái job.
-
-**Quy trình:**
-1. `vector_store.delete(doc_id)` — xóa vector cũ (đảm bảo idempotent)
-2. `metadata_store.update_status(doc_id, "indexing")`
-3. Upsert `DocumentRecord` vào PostgreSQL (`documents` table)
-4. Stamp `s3_uri` vào metadata mỗi chunk
-5. `vector_store.upsert(chunks)` → Qdrant
-6. `metadata_store.upsert_chunks(chunks)` → PostgreSQL (`document_chunks` table)
-7. `metadata_store.update_status(doc_id, "indexed")`
-8. `metadata_store.record_job(...)` → PostgreSQL (`ingestion_jobs` table)
-
-**Output:**
-```json
-{
-  "doc_id": "abc123",
+  "doc_id": "doc_123",
   "status": "indexed",
-  "chunk_count": 42,
-  "embedding_model": "text-embedding-3-small",
-  "duration_seconds": 3.14
+  "chunk_count": 42
 }
 ```
 
----
+Flow chính:
 
-### Orchestrator (`pipeline/run.py`)
+1. xóa vector cũ theo `doc_id`
+2. cập nhật document status sang `indexing`
+3. upsert metadata document
+4. ghi `s3_uri` vào metadata của mỗi chunk
+5. upsert chunks vào vector store
+6. upsert chunk metadata vào metadata store
+7. update `processed_at`, `total_chunks`, `status=indexed`
+8. record một row mới trong `ingestion_jobs`
 
-Điều phối toàn bộ pipeline, với:
+Nếu lỗi:
 
-- **Deadline guard:** kiểm tra `time.perf_counter()` trước mỗi bước; ném `TimeoutError` nếu vượt `SCAN_JOB_TIMEOUT_SECONDS`
-- **Error handling:** mọi exception đều được catch, ghi `status="failed"` vào metadata store, rethrow
-- **Guard rỗng:** nếu chunk list rỗng sau bước 3 → raise `ValueError` (PDF scan không có OCR)
-- **Lazy init:** `ai_provider`, `vector_store`, `metadata_store` được build tự động nếu không inject
+- record `ingestion_jobs` với `status=failed`
+- update document status thành `failed`
+- lỗi được re-raise lên orchestrator
+- S3 scanner sẽ retry document này ở chu kỳ scan tiếp theo
 
----
+## Orchestrator
 
-## Nguồn dữ liệu đầu vào
+`pipeline/run.py` là entry point chuẩn, được gọi duy nhất từ S3 scanner.
 
-### Kafka Consumer (`streaming/kafka_consumer.py`)
+Nó chịu trách nhiệm:
 
-Lắng nghe topic `DocumentUploaded`, xử lý từng event:
+- build dependencies nếu caller không inject
+- đọc file bytes qua `read_binary(job.file_uri)` trước khi gọi parse
+- `try_claim_ingest()` để tránh double-run cùng `doc_id`
+- deadline guard theo `SCAN_JOB_TIMEOUT_SECONDS`
+- fail-fast nếu parse/chunk sinh nội dung rỗng
+- detect `language` từ nội dung sau bước `clean`
 
-```
-Event JSON → KafkaAdapter.map() → IngestJob → pipeline.run()
-```
-
-- **Retry:** tối đa `CONSUMER_MAX_RETRIES` lần (mặc định 3), sleep tăng dần giữa các lần
-- **DLQ:** sau khi hết retry → gửi event lỗi tới topic `DocumentUploaded.DLQ` + ghi file JSON vào `data/dlq/`
-- **Commit:** offset chỉ commit sau khi xử lý thành công
-
-**Kafka Topics:**
-
-| Topic | Mục đích |
-|-------|---------|
-| `DocumentUploaded` | Event tài liệu mới được upload |
-| `EmbeddingDone` | Thông báo indexing thành công |
-| `IndexingFailed` | Thông báo indexing thất bại |
-| `DocumentUploaded.DLQ` | Dead Letter Queue |
-| `PermissionUpdated` | Cập nhật quyền truy cập |
-
----
-
-### S3 Scanner (`adapters/s3_adapter.py`)
-
-Quét S3 bucket theo lịch hoặc theo yêu cầu để phát hiện file mới/thay đổi.
-
-**Logic phân loại:**
-
-| Trạng thái file | Hành động |
-|-----------------|----------|
-| Chưa có trong DB | Tạo job mới |
-| Status = `indexing` | Skip (đang xử lý) |
-| Status = `failed` hoặc `pending` | Retry |
-| `s3_last_modified` mới hơn DB | Re-ingest |
-| Đã indexed, không thay đổi | Skip |
-
-- **doc_id** = `MD5(s3_uri)` — stable theo path, không phụ thuộc nội dung
-- Định dạng được hỗ trợ: `.pdf`, `.docx`, `.txt`, `.md`, `.html`, `.htm`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`
-
----
-
-## REST API (`api/main.py`)
-
-FastAPI application, khởi động với `lifespan` context.
-
-### Endpoints
-
-#### `POST /search`
-Tìm kiếm ngữ nghĩa.
+Nếu document đang `indexing` và chưa stale, pipeline trả:
 
 ```json
-// Request
-{ "query": "quy trình phê duyệt hợp đồng", "top_k": 5 }
+{
+  "doc_id": "doc_123",
+  "status": "skipped",
+  "chunk_count": 0
+}
+```
 
-// Response
+## Retrieval flow
+
+`retrieval/service.py` — luồng ra duy nhất.
+
+Flow:
+
+1. nhận query text từ `POST /search`
+2. embed query qua `AIProvider.embed([query])`
+3. tìm top-k từ `VectorStore.search()`
+4. filter theo `SEARCH_SCORE_THRESHOLD`
+5. trả list kết quả về caller
+
+Service có cache query embedding dạng LRU đơn giản trong memory process.
+
+## REST API
+
+### `POST /search` — luồng ra
+
+Request:
+
+```json
+{
+  "query": "travel reimbursement",
+  "top_k": 5
+}
+```
+
+Response:
+
+```json
 {
   "request_id": "uuid",
   "results": [
     {
-      "chunk_id": "abc_chunk_0001",
-      "content": "...",
-      "score": 0.87,
+      "chunk_id": "doc_1_chunk_0000",
+      "content": "....",
+      "score": 0.82,
       "s3_uri": "s3://bucket/path/file.pdf",
-      "page_start": 3,
-      "page_end": 3,
-      "doc_id": "abc123"
+      "page_start": 1,
+      "page_end": 1,
+      "section": null,
+      "doc_id": "doc_1"
     }
   ]
 }
 ```
 
-Score threshold: `SEARCH_SCORE_THRESHOLD` (mặc định 0.5, set 0.0 để tắt filter).
+Validation:
 
-#### `POST /scan`
-Trigger quét S3 thủ công (chạy background).
+- `query` không được blank
+- `query` có `max_length = SEARCH_QUERY_MAX_LENGTH`
+- `top_k` trong khoảng `1..50`
 
-```json
-// Request
-{ "bucket": "my-bucket", "prefix": "raw/" }
+### `POST /scan` — operational
 
-// Response
-{ "status": "scan started", "queued": 12 }
-```
+Trigger thủ công một chu kỳ S3 scanner. Cùng logic với scanner tự động.
 
-Trả `409` nếu đang có scan cycle chạy.
-
-#### `GET /status/{doc_id}`
-Kiểm tra trạng thái xử lý của một tài liệu.
+Request:
 
 ```json
 {
-  "doc_id": "abc123",
+  "bucket": "rag-pipeline-local",
+  "prefix": "raw/"
+}
+```
+
+Response:
+
+```json
+{
+  "status": "scan started",
+  "queued": 12
+}
+```
+
+Nếu đang có scan khác chạy: trả `409`.
+
+### `GET /status/{doc_id}` — operational
+
+Response:
+
+```json
+{
+  "doc_id": "doc_1",
   "status": "indexed",
   "file_path": "s3://bucket/file.pdf",
   "file_type": "pdf",
   "total_chunks": 42,
-  "uploaded_at": "2026-05-29T10:00:00Z",
-  "processed_at": "2026-05-29T10:00:05Z"
+  "uploaded_at": "2026-05-29T10:00:00+00:00",
+  "processed_at": "2026-05-29T10:00:05+00:00"
 }
 ```
 
-Trạng thái: `pending` → `indexing` → `indexed` | `failed`
+### `GET /health` — operational
 
-#### `GET /health`
-Health check.
+Response khi khỏe:
 
 ```json
 {
   "status": "ok",
-  "vector_store": "qdrant",
+  "vector_store": "QdrantStore",
+  "metadata_store": "SQLMetadataStore",
   "ai_provider": "OpenAIProvider",
-  "scanner": "enabled"
+  "scanner": "enabled",
+  "degraded_reasons": []
 }
 ```
 
----
+Response khi fallback/degraded:
 
-## Retrieval Service (`retrieval/service.py`)
-
-```
-query string
-    │
-    ▼
-AIProvider.embed([query])  →  query_vector: list[float]
-    │
-    ▼
-VectorStore.search(query_vector, top_k)
-    │
-    ▼
-Filter by score >= SEARCH_SCORE_THRESHOLD
-    │
-    ▼
-list[dict]  →  API response
+```json
+{
+  "status": "degraded",
+  "vector_store": "InMemoryVectorStore",
+  "metadata_store": "FileMetadataStore",
+  "ai_provider": "MockAIProvider",
+  "scanner": "disabled",
+  "degraded_reasons": [
+    "QdrantStore unavailable: ...",
+    "SQLMetadataStore unavailable: ..."
+  ]
+}
 ```
 
----
+## Storage layer
 
-## Data Stores
+### VectorStore contract
 
-### Vector Store — Qdrant
-
-| Item | Giá trị |
-|------|---------|
-| Collection | `QDRANT_COLLECTION` (mặc định `documents`) |
-| Distance | Cosine similarity |
-| Embedding dim | 1536 (text-embedding-3-small) |
-| Point ID | `UUID5(NAMESPACE_DNS, chunk_id)` |
-| Payload index | `doc_id` (keyword) — dùng để delete theo doc |
-
-**Fallback:** Nếu Qdrant không kết nối được → `InMemoryVectorStore` (cosine similarity thuần Python, không persistent).
-
-### Metadata Store — PostgreSQL
-
-Ba bảng chính:
-
-**`documents`** — trạng thái và metadata của mỗi tài liệu:
-```
-id (PK) | file_path | file_name | file_type | document_type | language
-status | total_chunks | s3_last_modified | uploaded_at | processed_at | updated_at
+```python
+class VectorStore(Protocol):
+    def upsert(self, chunks: list[ChunkResult]) -> None: ...
+    def search(self, vector: list[float], top_k: int, filters: dict | None = None) -> list[ChunkResult]: ...
+    def delete(self, doc_id: str) -> None: ...
 ```
 
-**`document_chunks`** — bản ghi mỗi chunk (không lưu embedding):
-```
-chunk_id (PK) | doc_id | chunk_index | content | page_start | page_end | section | token_count | created_at
-```
+Implementations:
 
-**`ingestion_jobs`** — lịch sử mỗi lần chạy pipeline:
-```
-id (PK) | doc_id | status | chunk_count | embedding_model | duration_seconds | error_message | started_at | finished_at
-```
+- `QdrantStore`
+- `InMemoryVectorStore`
 
-**Fallback chain:** `SQLMetadataStore` → `FileMetadataStore` (JSON file) → `InMemoryMetadataStore`
+### MetadataStore contract
 
-Schema migration quản lý bằng **Alembic** (`migrations/`).
-
----
-
-## AI Provider (`utils/ai_provider.py`)
-
-| Provider | Kích hoạt | Khả năng |
-|----------|-----------|---------|
-| `OpenAIProvider` | `AI_PROVIDER=openai` hoặc `auto` + có API key | embed + OCR (vision) |
-| `MockAIProvider` | `AI_PROVIDER=mock` hoặc `auto` + không có API key | SHA-256 deterministic embedding, OCR trả placeholder |
-
-**Auto-select logic:**
-- Có `AI_API_KEY` → `OpenAIProvider`
-- Không có key → `MockAIProvider` (phù hợp dev/test)
-
----
-
-## Cấu hình (`config/settings.py`)
-
-Tất cả cấu hình đọc từ file `.env` qua `pydantic-settings`.
-
-### AI
-
-| Biến | Mặc định | Mô tả |
-|------|----------|-------|
-| `AI_PROVIDER` | `auto` | `auto` / `openai` / `mock` |
-| `AI_API_KEY` | — | API key OpenAI hoặc compatible |
-| `AI_BASE_URL` | OpenAI official | Base URL cho OpenAI-compatible API |
-| `EMBED_MODEL` | `text-embedding-3-small` | Model embedding |
-| `VISION_MODEL` | `gpt-4o` | Model OCR/vision |
-| `EMBEDDING_DIM` | `1536` | Số chiều vector |
-| `AI_REQUEST_TIMEOUT_SECONDS` | `60.0` | Timeout gọi AI API |
-
-### Chunking
-
-| Biến | Mặc định | Mô tả |
-|------|----------|-------|
-| `CHUNK_SIZE` | `512` | Số token mỗi chunk |
-| `CHUNK_OVERLAP` | `64` | Số token overlap giữa 2 chunk liên tiếp |
-
-### Vector Store
-
-| Biến | Mặc định | Mô tả |
-|------|----------|-------|
-| `VECTOR_STORE` | `qdrant` | `qdrant` / `memory` |
-| `QDRANT_HOST` | `qdrant` | Host Qdrant |
-| `QDRANT_PORT` | `6333` | Port Qdrant |
-| `QDRANT_URL` | — | Full URL (ưu tiên hơn host+port) |
-| `QDRANT_COLLECTION` | `documents` | Tên collection |
-
-### Metadata Store
-
-| Biến | Mặc định | Mô tả |
-|------|----------|-------|
-| `METADATA_STORE` | `postgres` | `postgres` / `file` / `memory` |
-| `DATABASE_URL` | `postgresql://rag:rag@postgres:5432/ragdb` | PostgreSQL connection string |
-
-### S3
-
-| Biến | Mặc định | Mô tả |
-|------|----------|-------|
-| `USE_S3` | `false` | Bật S3 mode |
-| `S3_BUCKET` | `rag-pipeline-local` | Bucket mặc định |
-| `S3_ENDPOINT` | `http://minio:9000` | Endpoint (MinIO hoặc AWS) |
-| `AWS_ACCESS_KEY_ID` | — | Access key |
-| `AWS_SECRET_ACCESS_KEY` | — | Secret key |
-| `SCAN_INTERVAL_SECONDS` | `300` | Chu kỳ S3 scan (0 = tắt) |
-| `SCAN_PREFIX` | `` | Key prefix để quét |
-| `SCAN_MAX_WORKERS` | `4` | Số worker song song khi scan |
-| `SCAN_JOB_TIMEOUT_SECONDS` | `900` | Timeout mỗi job (0 = tắt) |
-
-### Kafka
-
-| Biến | Mặc định | Mô tả |
-|------|----------|-------|
-| `KAFKA_BOOTSTRAP` | `kafka:9092` | Bootstrap servers |
-| `TOPIC_INGEST` | `DocumentUploaded` | Topic nhận event |
-| `TOPIC_DONE` | `EmbeddingDone` | Topic thông báo xong |
-| `TOPIC_FAILED` | `IndexingFailed` | Topic thông báo lỗi |
-| `TOPIC_DLQ` | `DocumentUploaded.DLQ` | Dead Letter Queue |
-| `CONSUMER_GROUP_ID` | `de-ingestion-service` | Consumer group |
-| `CONSUMER_MAX_RETRIES` | `3` | Số lần retry trước khi vào DLQ |
-
-### Retrieval
-
-| Biến | Mặc định | Mô tả |
-|------|----------|-------|
-| `SEARCH_SCORE_THRESHOLD` | `0.5` | Ngưỡng cosine similarity tối thiểu (0.0 = tắt) |
-
----
-
-## Cấu trúc thư mục
-
-```
-Vin-PipeLine/
-├── pipeline/
-│   ├── 01_parse.py       # Bước 1: Trích xuất text từ file
-│   ├── 02_clean.py       # Bước 2: Chuẩn hóa text
-│   ├── 03_chunk.py       # Bước 3: Chia chunk theo BPE token
-│   ├── 04_embed.py       # Bước 4: Vector hóa
-│   ├── 05_index.py       # Bước 5: Ghi vào store
-│   └── run.py            # Orchestrator
-├── api/
-│   └── main.py           # FastAPI app (search, scan, status, health)
-├── retrieval/
-│   └── service.py        # RetrievalService (embed query → vector search)
-├── streaming/
-│   └── kafka_consumer.py # Kafka consumer loop
-├── adapters/
-│   ├── s3_adapter.py     # S3Scanner (phát hiện file mới/thay đổi)
-│   ├── kafka_adapter.py  # Map Kafka event → IngestJob
-│   └── file_adapter.py   # Local file adapter
-├── models/
-│   └── ingest_job.py     # IngestJob, ChunkResult, DocumentRecord
-├── utils/
-│   ├── ai_provider.py    # OpenAIProvider, MockAIProvider
-│   ├── stores.py         # VectorStore, MetadataStore + implementations
-│   ├── storage.py        # read_binary, write_dlq_file
-│   ├── notifier.py       # Gửi event ra Kafka
-│   ├── validator.py      # Validation helpers
-│   └── mapper.py         # Mapping utilities
-├── db/
-│   └── schema.py         # SQLAlchemy table definitions (source of truth)
-├── config/
-│   └── settings.py       # Pydantic settings (đọc .env)
-├── migrations/           # Alembic migrations
-│   ├── env.py
-│   └── versions/
-├── dags/
-│   └── pipeline_dag.py   # Airflow DAG (nếu dùng)
-└── tests/                # Unit & integration tests
+```python
+class MetadataStore(Protocol):
+    def upsert(self, doc: DocumentRecord) -> None: ...
+    def update_status(self, doc_id: str, status: str) -> None: ...
+    def get_document(self, doc_id: str) -> DocumentRecord | None: ...
+    def get_by_file_path(self, file_path: str) -> DocumentRecord | None: ...
+    def get_by_file_paths(self, file_paths: list[str]) -> dict[str, DocumentRecord]: ...
+    def upsert_chunks(self, chunks: list[ChunkResult]) -> None: ...
+    def try_claim_ingest(self, job: IngestJob) -> bool: ...
+    def record_job(...) -> None: ...
+    def update_processed(...) -> None: ...
 ```
 
----
+Implementations:
 
-## Flow dữ liệu hoàn chỉnh
+- `SQLMetadataStore`
+- `FileMetadataStore`
+- `InMemoryMetadataStore`
 
-```
-File (PDF/DOCX/TXT/HTML/Image)
-        │
-        │ S3 URI hoặc local path
-        ▼
-┌───────────────┐
-│ 01_parse.py   │  pypdf / docx / html.parser / OCR (vision model)
-│               │──► list[(page_num, raw_text)]
-└───────────────┘
-        │
-        ▼
-┌───────────────┐
-│ 02_clean.py   │  normalize whitespace, drop empty pages
-│               │──► list[(page_num, clean_text)]
-└───────────────┘
-        │
-        ▼
-┌───────────────┐
-│ 03_chunk.py   │  tiktoken BPE, sliding window 512/64
-│               │──► list[ChunkResult(chunk_id, content, page_start, page_end)]
-└───────────────┘
-        │
-        ▼
-┌───────────────┐
-│ 04_embed.py   │  OpenAI text-embedding-3-small, batch=32
-│               │──► list[ChunkResult(+ embedding: list[float])]
-└───────────────┘
-        │
-        ▼
-┌───────────────┐
-│ 05_index.py   │  upsert Qdrant + PostgreSQL
-│               │──► { doc_id, status, chunk_count, duration_seconds }
-└───────────────┘
-        │
-        ▼
-   ┌─────────┐      ┌─────────────┐
-   │ Qdrant  │      │  PostgreSQL │
-   │ vectors │      │  metadata   │
-   └────┬────┘      └──────┬──────┘
-        └──────┬───────────┘
-               ▼
-    POST /search  →  RetrievalService
-        │
-        ▼
-    Embed query → cosine search → filter by threshold → JSON response
-```
+## Database schema
 
----
+### `documents`
 
-## Xử lý lỗi & Idempotency
+| Column | Nguồn |
+|---|---|
+| `id` | MD5 hash của S3 URI — từ scanner |
+| `file_path` | S3 URI — từ scanner |
+| `file_name` | typed field trên `IngestJob`, set từ scanner |
+| `file_type` | file extension — từ scanner |
+| `document_type` | first path segment sau SCAN_PREFIX — từ scanner |
+| `title` | `file_name` — set bởi `05_index.py` |
+| `language` | detect từ nội dung document — set bởi `run.py` sau `clean` |
+| `status` | pipeline quản lý (`pending` → `indexing` → `indexed` / `failed`) |
+| `total_chunks` | pipeline tính sau khi chunk |
+| `s3_last_modified` | `obj["LastModified"]` — từ scanner |
+| `uploaded_at` | thời điểm pipeline bắt đầu xử lý lần đầu |
+| `processed_at` | thời điểm index hoàn thành |
+| `updated_at` | pipeline update mỗi khi ghi |
 
-- **Idempotent re-ingest:** `05_index` xóa vector cũ trước khi upsert mới → chạy lại cùng `doc_id` luôn an toàn
-- **S3 re-ingest:** phát hiện qua `s3_last_modified` mới hơn giá trị đã lưu trong DB
-- **Timeout per job:** `SCAN_JOB_TIMEOUT_SECONDS` kiểm tra ở đầu mỗi bước pipeline
-- **Kafka DLQ:** sau `CONSUMER_MAX_RETRIES` lần thất bại → lưu vào `DocumentUploaded.DLQ` + file JSON tại `data/dlq/`
-- **Store fallback:** Qdrant → InMemory; PostgreSQL → FileStore → InMemory
-- **Scan concurrency guard:** `threading.Lock` đảm bảo không có 2 scan cycle chạy đồng thời
+Không có field nào phụ thuộc vào metadata do người dùng tự gắn hoặc external service.
+
+### `document_chunks`
+
+- `chunk_id`
+- `doc_id`
+- `chunk_index`
+- `content`
+- `page_start`
+- `page_end`
+- `section`
+- `token_count`
+- `created_at`
+
+### `ingestion_jobs`
+
+- `id`
+- `doc_id`
+- `status`
+- `chunk_count`
+- `embedding_model`
+- `duration_seconds`
+- `error_message`
+- `started_at`
+- `finished_at`
+
+## Runtime config
+
+- AI: `AI_PROVIDER`, `AI_BASE_URL`, `AI_API_KEY`, `EMBED_MODEL`, `VISION_MODEL`, `EMBEDDING_DIM`
+- chunking: `CHUNK_SIZE`, `CHUNK_OVERLAP`
+- vector store: `VECTOR_STORE`, `QDRANT_HOST`, `QDRANT_PORT`, `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`
+- metadata store: `METADATA_STORE`, `DATABASE_URL`
+- S3: `USE_S3`, `S3_BUCKET`, `S3_ENDPOINT`, `SCAN_INTERVAL_SECONDS`, `SCAN_PREFIX`, `SCAN_MAX_WORKERS`, `SCAN_JOB_TIMEOUT_SECONDS`
+- retrieval: `SEARCH_SCORE_THRESHOLD`, `SEARCH_QUERY_MAX_LENGTH`, `SEARCH_QUERY_CACHE_SIZE`
+
+## Build fallbacks
+
+- `build_ai_provider()` trả `(provider, warning)`
+- `build_vector_store()` trả `(store, warning)`
+- `build_metadata_store()` trả `(store, warning)`
+- `api/main.py` unpack warnings này vào `degraded_reasons` cho `/health`
+
+## Nguyên tắc cứng
+
+- Chỉ 2 luồng qua ranh giới: S3 scanner vào, API ra.
+- Pipeline chỉ biết `IngestJob`, `ChunkResult`, `AIProvider`, `VectorStore`, `MetadataStore`.
+- Không đặt SDK-specific code vào `pipeline/`.
+- Mọi thay đổi runtime đi qua env vars trước khi sửa core flow.
+- `ARCHITECTURE.md` và file này phải được cập nhật mỗi khi thay đổi contract API, data model hoặc database schema.
