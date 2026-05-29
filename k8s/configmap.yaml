@@ -9,7 +9,7 @@ data:
   QDRANT_HOST: "qdrant"
   QDRANT_PORT: "6333"
   QDRANT_COLLECTION: "documents"
-  EMBEDDING_DIM: "1536"
+  EMBEDDING_DIM: "32"
   METADATA_STORE: "postgres"
   USE_S3: "false"
   SCAN_PREFIX: ""
