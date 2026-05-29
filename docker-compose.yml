@@ -83,7 +83,7 @@ services:
       - AI_PROVIDER=mock
       - VECTOR_STORE=memory
       - METADATA_STORE=memory
-    command: ["pytest", "-q", "-m", "not integration"]
+    command: ["pytest", "-q", "-m", "not integration and not qdrant and not minio"]
 
 volumes:
   minio_data:
