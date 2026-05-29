@@ -1,5 +1,22 @@
 # Tests — Structure & Coverage Backlog
 
+## pytest markers
+
+| Marker | Ý nghĩa | Chạy trong CI |
+|---|---|---|
+| *(không có)* | Unit tests — chỉ dùng mock/in-memory | `pytest` job + `docker-test` job |
+| `qdrant` | Integration với Qdrant thật (Cloud hoặc local) | `qdrant-integration` job |
+| `minio` | Integration với MinIO thật | `minio-integration` job |
+
+`addopts` trong `pytest.ini` mặc định loại trừ cả 3: `not integration and not qdrant and not minio`.
+
+Chạy thủ công integration tests:
+
+```bash
+pytest -m qdrant -v   # cần QDRANT_URL + QDRANT_API_KEY
+pytest -m minio -v    # cần MINIO_TEST_ENDPOINT
+```
+
 ## Test scaffolding
 
 ### `tests/factories.py`
@@ -114,7 +131,7 @@ Mỗi mục là behavior chưa có test. Thêm vào file đã ghi — tạo file
 - [ ] file unsupported suffix → bỏ qua
 - [ ] list objects lỗi → trả `[]`, log phù hợp
 
-→ `tests/adapters/test_s3_scanner_minio_integration.py`
+→ `tests/adapters/test_s3_scanner_minio_integration.py` *(marker: `minio`)*
 
 - [x] MinIO local: object thật trong bucket → scanner tạo `IngestJob`
 - [x] `file_name` map vào typed field trên `IngestJob`
@@ -122,7 +139,7 @@ Mỗi mục là behavior chưa có test. Thêm vào file đã ghi — tạo file
 
 ### Stores
 
-→ `tests/stores/`
+→ `tests/stores/` *(Qdrant integration: marker `qdrant`)*
 
 - [ ] `QdrantStore` detect dimension mismatch của collection — `test_qdrant_integration.py`
 - [ ] `build_vector_store()` fallback → set warning — `test_in_memory_stores.py`

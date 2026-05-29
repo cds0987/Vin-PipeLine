@@ -96,7 +96,7 @@ $env:QDRANT_URL="https://<cluster>.cloud.qdrant.io"
 $env:QDRANT_API_KEY="<api-key>"
 $env:QDRANT_COLLECTION="ci-integration-test"
 $env:EMBEDDING_DIM="32"
-python -m pytest -m integration -v
+python -m pytest -m qdrant -v
 ```
 
 ### S3 local integration với MinIO
@@ -112,7 +112,7 @@ Chạy adapter integration test từ image test:
 ```powershell
 docker compose build test
 docker run --rm --network e-commerceevents_default e-commerceevents-test:latest `
-  sh -lc "pytest tests/adapters/test_s3_scanner_minio_integration.py -q -m integration"
+  sh -lc "pytest tests/adapters/test_s3_scanner_minio_integration.py -q -m minio"
 ```
 
 Test này verify `S3Scanner` với MinIO thật:
@@ -174,6 +174,76 @@ migrations/   Alembic migrations
 tests/        Test suite theo domain
 docs/         Tài liệu hệ thống
 ```
+
+## Deployment — GKE (production)
+
+Cluster: `vin-pipeline`, zone `asia-southeast1-a`, project `vintravel-chatbot`.  
+API external IP: `136.110.29.1` (LoadBalancer).
+
+### Kiểm tra trạng thái
+
+```bash
+kubectl get pods
+kubectl get services
+```
+
+### Test nhanh trên production
+
+```powershell
+# Health check
+Invoke-RestMethod http://136.110.29.1/health
+
+# Search
+Invoke-RestMethod -Uri "http://136.110.29.1/search" -Method POST `
+  -ContentType "application/json" -Body '{"query": "test", "top_k": 5}'
+```
+
+### Xem log API
+
+```bash
+kubectl logs deployment/vin-pipeline-api --tail=100 -f
+```
+
+### Port-forward để debug nội bộ
+
+```bash
+# Qdrant REST
+kubectl port-forward qdrant-0 6333:6333 &
+
+# Postgres
+kubectl port-forward postgres-0 5432:5432 &
+```
+
+### Khi có S3 credentials từ team khác
+
+```bash
+# Cập nhật secret
+kubectl create secret generic vin-pipeline-secret \
+  --from-literal=S3_ENDPOINT=<url> \
+  --from-literal=S3_ACCESS_KEY=<key> \
+  --from-literal=S3_SECRET_KEY=<secret> \
+  --from-literal=S3_BUCKET=<bucket> \
+  -o yaml --dry-run=client | kubectl apply -f -
+```
+
+Sau đó đổi `USE_S3: "true"` trong `k8s/configmap.yaml` và push lên main — CI sẽ tự deploy.
+
+### Khi đổi AI provider thật (OpenAI)
+
+1. Xóa collection cũ: `curl -X DELETE http://localhost:6333/collections/documents` (qua port-forward)
+2. Cập nhật `k8s/configmap.yaml`: `AI_PROVIDER: "auto"`, `EMBEDDING_DIM: "1536"`
+3. Thêm `AI_API_KEY` vào secret
+4. Push lên main
+
+### CI/CD — 5 jobs
+
+| Job | Trigger | Việc làm |
+|---|---|---|
+| `pytest` | mọi push | Unit tests với mock/in-memory, không cần infra |
+| `docker-test` | mọi push | Full stack trong Docker Compose (Qdrant + MinIO) |
+| `qdrant-integration` | push (không phải fork PR) | Tests với Qdrant Cloud thật (`-m qdrant`) |
+| `minio-integration` | push (không phải fork PR) | Tests với MinIO Docker (`-m minio`) |
+| `deploy` | push lên `main` sau khi `pytest` + `docker-test` pass | Build image → Artifact Registry → kubectl apply → rollout |
 
 ## Những hiểu nhầm phổ biến
 
