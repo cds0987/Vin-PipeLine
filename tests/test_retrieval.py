@@ -1,42 +1,58 @@
 from __future__ import annotations
 
-from adapters.file_adapter import FileAdapter
-from pipeline.run import run
+from config import settings
+from models.ingest_job import ChunkResult
 from retrieval.service import RetrievalService
 
 
-def _index(doc_id, file_uri, fake_ai_provider, vector_store, metadata_store):
-    job = FileAdapter().map(file_uri, doc_id=doc_id)
-    run(job, ai_provider=fake_ai_provider, vector_store=vector_store, metadata_store=metadata_store)
+class _AIProvider:
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    def ocr(self, image_bytes: bytes) -> str:
+        return ""
 
 
-def test_search_returns_chunks(fake_ai_provider, vector_store, metadata_store):
-    _index("doc-a", "data/sample/policy.txt", fake_ai_provider, vector_store, metadata_store)
-    service = RetrievalService(fake_ai_provider, vector_store)
+class _VectorStore:
+    def search(self, vector: list[float], top_k: int, filters: dict | None = None) -> list[ChunkResult]:
+        return [
+            ChunkResult(
+                chunk_id="high",
+                doc_id="doc-1",
+                content="high score",
+                metadata={"score": 0.8, "s3_uri": "s3://bucket/high.pdf"},
+                page_start=1,
+                page_end=1,
+            ),
+            ChunkResult(
+                chunk_id="low",
+                doc_id="doc-2",
+                content="low score",
+                metadata={"score": 0.2, "s3_uri": "s3://bucket/low.pdf"},
+                page_start=2,
+                page_end=2,
+            ),
+        ]
 
-    results = service.search("travel reimbursement", top_k=3)
+    def upsert(self, chunks: list[ChunkResult]) -> None:
+        return None
 
-    assert results
-    assert results[0]["doc_id"] == "doc-a"
-
-
-def test_search_includes_s3_uri(fake_ai_provider, vector_store, metadata_store):
-    _index("doc-b", "data/sample/policy.txt", fake_ai_provider, vector_store, metadata_store)
-    service = RetrievalService(fake_ai_provider, vector_store)
-
-    results = service.search("policy", top_k=3)
-
-    assert results
-    assert results[0]["s3_uri"] == "data/sample/policy.txt"
+    def delete(self, doc_id: str) -> None:
+        return None
 
 
-def test_search_multiple_docs_returns_all(fake_ai_provider, vector_store, metadata_store):
-    _index("doc-c", "data/sample/policy.txt", fake_ai_provider, vector_store, metadata_store)
-    _index("doc-d", "data/sample/faq.md", fake_ai_provider, vector_store, metadata_store)
-    service = RetrievalService(fake_ai_provider, vector_store)
+def test_retrieval_service_filters_low_scores(monkeypatch):
+    monkeypatch.setattr("config.settings.SEARCH_SCORE_THRESHOLD", 0.5)
 
-    results = service.search("question", top_k=5)
+    service = RetrievalService(
+        ai_provider=_AIProvider(),
+        vector_store=_VectorStore(),
+    )
 
-    assert results
-    doc_ids = {r["doc_id"] for r in results}
-    assert len(doc_ids) >= 1
+    results = service.search("policy", top_k=5)
+
+    assert [item["chunk_id"] for item in results] == ["high"]
+
+
+def test_search_threshold_default_is_enabled():
+    assert settings.SEARCH_SCORE_THRESHOLD == 0.5

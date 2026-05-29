@@ -35,6 +35,7 @@ class OpenAIProvider:
         self._client: Any = OpenAI(
             base_url=resolved_base_url or OPENAI_DEFAULT_BASE_URL,
             api_key=resolved_api_key,
+            timeout=settings.AI_REQUEST_TIMEOUT_SECONDS,
         )
         self._embed_model = embed_model or settings.EMBED_MODEL
         self._vision_model = vision_model or settings.VISION_MODEL

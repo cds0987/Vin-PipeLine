@@ -29,6 +29,7 @@ def run(
         document_type=job.document_type,
         language=job.language,
         status="indexing",
+        s3_last_modified=job.s3_last_modified,
         uploaded_at=now,
         updated_at=now,
     )

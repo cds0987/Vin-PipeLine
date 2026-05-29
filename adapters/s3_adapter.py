@@ -15,7 +15,10 @@ _SUPPORTED_SUFFIXES = {".pdf", ".docx", ".txt", ".md", ".html", ".htm",
 
 
 def _uri_to_doc_id(s3_uri: str) -> str:
-    """Stable doc_id từ s3_uri — cùng file luôn cho cùng ID."""
+    # doc_id is derived from the S3 URI path, not file content.
+    # Trade-off: re-uploading the same path re-indexes cleanly (no duplicate),
+    # but renaming/moving a file creates a new doc_id and leaves the old record
+    # stale in the DB.  S3 renames are rare; acceptable for this use case.
     return hashlib.md5(s3_uri.encode()).hexdigest()
 
 
@@ -35,7 +38,7 @@ class S3Scanner:
 
     Logic:
     - file chưa có trong documents table → ingest
-    - file có trong documents table nhưng S3 last_modified mới hơn uploaded_at → re-ingest
+    - file có trong documents table nhưng S3 last_modified mới hơn s3_last_modified đã lưu → re-ingest
     - file đã indexed và không đổi → skip
     - file đang indexing → skip (tránh double-run)
     """
@@ -65,12 +68,11 @@ class S3Scanner:
         for page in pages:
             for obj in page.get("Contents", []):
                 key: str = obj["Key"]
-                if not Path(key).suffix.lower() in _SUPPORTED_SUFFIXES:
+                if Path(key).suffix.lower() not in _SUPPORTED_SUFFIXES:
                     continue
 
                 s3_uri = f"s3://{bucket}/{key}"
-                # S3 last_modified is timezone-aware; strip tz for comparison
-                last_modified = obj["LastModified"].replace(tzinfo=None)
+                s3_last_modified = obj["LastModified"]  # tz-aware datetime from S3
                 file_name = Path(key).name
 
                 existing = self._metadata_store.get_by_file_path(s3_uri)
@@ -80,6 +82,7 @@ class S3Scanner:
                     jobs.append(IngestJob(
                         doc_id=_uri_to_doc_id(s3_uri),
                         file_uri=s3_uri,
+                        s3_last_modified=s3_last_modified,
                         metadata={"file_name": file_name},
                     ))
                 elif existing.status == "indexing":
@@ -89,13 +92,15 @@ class S3Scanner:
                     jobs.append(IngestJob(
                         doc_id=existing.id,
                         file_uri=s3_uri,
+                        s3_last_modified=s3_last_modified,
                         metadata={"file_name": file_name},
                     ))
-                elif existing.uploaded_at and last_modified > existing.uploaded_at.replace(tzinfo=None):
+                elif existing.s3_last_modified and s3_last_modified.replace(tzinfo=None) > existing.s3_last_modified.replace(tzinfo=None):
                     log.info("S3Scanner: file changed %s", s3_uri)
                     jobs.append(IngestJob(
                         doc_id=existing.id,
                         file_uri=s3_uri,
+                        s3_last_modified=s3_last_modified,
                         metadata={"file_name": file_name},
                     ))
                 else:

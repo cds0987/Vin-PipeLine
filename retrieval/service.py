@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from config import settings
 from utils.ai_provider import AIProvider, build_ai_provider
 from utils.stores import VectorStore, build_vector_store
 
@@ -15,6 +16,7 @@ class RetrievalService:
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
         query_vector = self._ai_provider.embed([query])[0]
+        threshold = settings.SEARCH_SCORE_THRESHOLD
         chunks = self._vector_store.search(query_vector, top_k=top_k)
         return [
             {
@@ -28,4 +30,5 @@ class RetrievalService:
                 "doc_id": chunk.doc_id,
             }
             for chunk in chunks
+            if threshold == 0.0 or (chunk.metadata.get("score") or 0.0) >= threshold
         ]

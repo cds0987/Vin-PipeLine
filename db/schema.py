@@ -37,6 +37,7 @@ documents = Table(
     Column("language", String, nullable=False, server_default="vi"),
     Column("status", String, nullable=False, server_default="pending"),
     Column("total_chunks", Integer),
+    Column("s3_last_modified", DateTime),
     Column("uploaded_at", DateTime, nullable=False),
     Column("processed_at", DateTime),
     Column("updated_at", DateTime, nullable=False),

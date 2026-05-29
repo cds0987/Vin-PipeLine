@@ -20,28 +20,47 @@ def run(
     ai_provider: AIProvider | None = None,
     vector_store: VectorStore | None = None,
     metadata_store: MetadataStore | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict:
+    def _check_deadline(stage: str) -> None:
+        if deadline_monotonic is not None and time.perf_counter() > deadline_monotonic:
+            raise TimeoutError(f"doc_id={job.doc_id}: ingest timeout exceeded at stage={stage}")
+
     started_at = time.perf_counter()
     ai = ai_provider or build_ai_provider()
     vectors = vector_store or build_vector_store()
     metadata = metadata_store or build_metadata_store()
     try:
-        text = parse.run(job, ai)
-        text = clean.run(text)
-        chunks = chunk.run(text, job)
+        _check_deadline("parse")
+        pages = parse.run(job, ai)
+        _check_deadline("clean")
+        pages = clean.run(pages)
+        _check_deadline("chunk")
+        chunks = chunk.run(pages, job)
         if not chunks:
-            raise ValueError(f"doc_id={job.doc_id}: parse produced empty text — possible scan PDF without OCR")
+            raise ValueError(f"doc_id={job.doc_id}: parse produced empty text - possible scan PDF without OCR")
+        _check_deadline("embed")
         chunks = embed.run(chunks, ai)
+        _check_deadline("index")
         duration = round(time.perf_counter() - started_at, 3)
-        stats = index.run(chunks, job, vectors, metadata,
-                          embedding_model=settings.EMBED_MODEL,
-                          duration_seconds=duration)
+        stats = index.run(
+            chunks,
+            job,
+            vectors,
+            metadata,
+            embedding_model=settings.EMBED_MODEL,
+            duration_seconds=duration,
+        )
         stats["embedding_model"] = settings.EMBED_MODEL
         stats["duration_seconds"] = duration
         return stats
     except Exception as exc:
         duration = round(time.perf_counter() - started_at, 3)
-        metadata.record_job(doc_id=job.doc_id, status="failed",
-                            duration_seconds=duration, error_message=str(exc))
+        metadata.record_job(
+            doc_id=job.doc_id,
+            status="failed",
+            duration_seconds=duration,
+            error_message=str(exc),
+        )
         metadata.update_status(job.doc_id, "failed")
         raise

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     embed_model: str = "text-embedding-3-small"
     vision_model: str = "gpt-4o"
     embedding_dim: int = 1536
+    ai_request_timeout_seconds: float = 60.0
 
     chunk_size: int = 512
     chunk_overlap: int = 64
@@ -52,6 +53,10 @@ class Settings(BaseSettings):
 
     scan_interval_seconds: int = 300   # S3 poll interval; 0 = disable background scanner
     scan_prefix: str = ""              # S3 key prefix to scan, e.g. "raw/"
+    scan_max_workers: int = 4          # max concurrent pipeline workers per scan cycle
+    scan_job_timeout_seconds: int = 900  # max wall-clock seconds per ingest job; 0 = disable
+
+    search_score_threshold: float = 0.5  # minimum cosine similarity; 0.0 = disabled
 
 
 _settings = Settings()
@@ -83,6 +88,7 @@ AI_API_KEY = _settings.ai_api_key
 EMBED_MODEL = _settings.embed_model
 VISION_MODEL = _settings.vision_model
 EMBEDDING_DIM = _settings.embedding_dim
+AI_REQUEST_TIMEOUT_SECONDS = _settings.ai_request_timeout_seconds
 
 CHUNK_SIZE = _settings.chunk_size
 CHUNK_OVERLAP = _settings.chunk_overlap
@@ -113,6 +119,9 @@ CONSUMER_GROUP_ID = _settings.consumer_group_id
 CONSUMER_MAX_RETRIES = _settings.consumer_max_retries
 SCAN_INTERVAL_SECONDS = _settings.scan_interval_seconds
 SCAN_PREFIX = _settings.scan_prefix
+SCAN_MAX_WORKERS = _settings.scan_max_workers
+SCAN_JOB_TIMEOUT_SECONDS = _settings.scan_job_timeout_seconds
+SEARCH_SCORE_THRESHOLD = _settings.search_score_threshold
 
 for _path in (RAW_DIR, DLQ_DIR, SAMPLE_DIR):
     _path.mkdir(parents=True, exist_ok=True)

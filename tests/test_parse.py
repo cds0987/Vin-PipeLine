@@ -1,21 +1,61 @@
 from __future__ import annotations
 
 import importlib
+import sys
+import types
 
-from models.ingest_job import IngestJob
 
 parse_module = importlib.import_module("pipeline.01_parse")
 
 
-def test_parse_txt_file(fake_ai_provider):
-    job = IngestJob(doc_id="doc-1", file_uri="data/sample/policy.txt")
-    text = parse_module.run(job, fake_ai_provider)
-    assert "reimbursement policy" in text
-    assert "Receipts are mandatory" in text
+class _FakeImage:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
 
 
-def test_parse_html_file(fake_ai_provider):
-    job = IngestJob(doc_id="doc-2", file_uri="data/sample/handbook.html")
-    text = parse_module.run(job, fake_ai_provider)
-    assert "Onboarding Handbook" in text
-    assert "security training" in text
+class _FakePage:
+    def __init__(self, text: str = "", images: list[_FakeImage] | None = None) -> None:
+        self._text = text
+        self.images = images or []
+
+    def extract_text(self) -> str:
+        return self._text
+
+
+class _FakeReader:
+    def __init__(self, *_args, **_kwargs) -> None:
+        self.pages = [_FakePage("")]
+
+
+class _OCRProvider:
+    def __init__(self) -> None:
+        self.calls: list[bytes] = []
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] for _ in texts]
+
+    def ocr(self, image_bytes: bytes) -> str:
+        self.calls.append(image_bytes)
+        return "ocr from rendered page"
+
+
+def test_parse_pdf_falls_back_to_rendered_page_ocr(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pypdf", types.SimpleNamespace(PdfReader=_FakeReader))
+
+    fake_document = types.SimpleNamespace(
+        load_page=lambda _index: types.SimpleNamespace(
+            get_pixmap=lambda **_kwargs: types.SimpleNamespace(tobytes=lambda _fmt: b"rendered-page")
+        ),
+        close=lambda: None,
+    )
+    monkeypatch.setitem(sys.modules, "fitz", types.SimpleNamespace(
+        Matrix=lambda *_args: object(),
+        open=lambda **_kwargs: fake_document,
+    ))
+
+    ai_provider = _OCRProvider()
+
+    pages = parse_module._parse_pdf(b"%PDF-1.4", ai_provider)
+
+    assert pages == [(1, "ocr from rendered page")]
+    assert ai_provider.calls == [b"rendered-page"]

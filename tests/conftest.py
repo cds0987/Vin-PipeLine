@@ -4,7 +4,7 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from utils.stores import FileMetadataStore, InMemoryVectorStore
+from utils.stores import InMemoryMetadataStore, InMemoryVectorStore
 
 
 class FakeAIProvider:
@@ -26,8 +26,8 @@ def vector_store() -> InMemoryVectorStore:
 
 
 @pytest.fixture
-def metadata_store(tmp_path) -> FileMetadataStore:
-    return FileMetadataStore(base_dir=str(tmp_path / "store"))
+def metadata_store() -> InMemoryMetadataStore:
+    return InMemoryMetadataStore()
 
 
 @pytest.fixture
