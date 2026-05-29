@@ -46,3 +46,31 @@ jobs:
 
       - name: Verify Docker Compose test flow
         run: docker compose run --rm test
+
+  qdrant-integration:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      AI_PROVIDER: mock
+      METADATA_STORE: memory
+      USE_S3: "false"
+      VECTOR_STORE: qdrant
+      QDRANT_URL: https://4a17666f-23ca-4555-9a16-ba7867005326.us-east-1-1.aws.cloud.qdrant.io
+      QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+      QDRANT_COLLECTION: ci-integration-test
+      EMBEDDING_DIM: "32"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Qdrant integration tests
+        run: pytest -m integration -v
