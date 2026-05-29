@@ -55,7 +55,7 @@ copy .env.example .env           # Windows
 
 # 4. Chạy tests (không cần Docker, không cần API key)
 pytest -q
-# → 17 passed
+# → 17 passed  (~7s do tiktoken load encoding lần đầu)
 ```
 
 Nếu 17 tests pass — môi trường đã sẵn sàng.
@@ -73,9 +73,9 @@ Vin-PipeLine/
 ├── pipeline/               5 bước xử lý — KHÔNG import SDK bên ngoài
 │   ├── 01_parse.py         file_uri → raw text (PDF/DOCX/TXT/HTML/Image)
 │   ├── 02_clean.py         text → normalized text
-│   ├── 03_chunk.py         text → chunks[] sliding window
+│   ├── 03_chunk.py         text → chunks[] tiktoken BPE sliding window
 │   ├── 04_embed.py         chunks[] → embeddings qua AIProvider
-│   ├── 05_index.py         chunks[] → Qdrant + PostgreSQL
+│   ├── 05_index.py         chunks[] → Qdrant + PostgreSQL (documents + document_chunks + ingestion_jobs)
 │   └── run.py              orchestrator — gọi tuần tự 5 bước
 │
 ├── retrieval/
@@ -95,6 +95,7 @@ Vin-PipeLine/
 ├── utils/
 │   ├── ai_provider.py      AIProvider Protocol + OpenAIProvider + MockAIProvider
 │   ├── stores.py           QdrantStore, InMemoryVectorStore, SQLMetadataStore, ...
+│   │                       Tables: documents, document_permissions, document_chunks, ingestion_jobs
 │   ├── storage.py          read_binary() — S3 hoặc local
 │   ├── notifier.py         Kafka publish helper
 │   ├── validator.py        validate Kafka payload → DLQ nếu fail
@@ -179,7 +180,7 @@ Không set `QDRANT_URL` (hoặc để trống) → tự fallback về `QDRANT_HO
 ### Unit tests (chạy mọi lúc, không cần external service)
 
 ```bash
-pytest -q                    # 17 tests, ~0.3s
+pytest -q                    # 17 tests, ~7s (tiktoken BPE encoding)
 pytest -q tests/test_api.py  # chỉ API tests
 pytest -q -k "retrieval"     # chỉ tests có từ "retrieval"
 ```
@@ -255,6 +256,7 @@ VISION_MODEL=llava
 ### Đổi Vector DB (Qdrant → Milvus)
 
 1. Tạo class `MilvusStore` trong `utils/stores.py` implement 3 method: `upsert`, `search`, `delete`
+   - Lưu ý: `upsert_chunks()` và `record_job()` thuộc `MetadataStore`, không phải `VectorStore`
 2. Thêm case trong `build_vector_store()`:
    ```python
    if settings.VECTOR_STORE == "milvus":
@@ -335,6 +337,12 @@ hoặc xóa `VECTOR_STORE` khỏi shell env trước khi chạy.
 
 **`datetime.utcnow()` deprecation warning**
 — Đã fix trong toàn bộ codebase. Nếu thấy trong output, warning đến từ thư viện bên thứ ba (pydantic internals), không phải từ code của service.
+
+**Pipeline báo lỗi `Parse produced empty text`**
+— File là PDF scan (ảnh, không có text layer). Parser `pypdf` trả về empty string. Cần đảm bảo `AI_PROVIDER` và `AI_API_KEY` được set để OCR fallback hoạt động, hoặc convert PDF sang ảnh rồi ingest dưới dạng `.png`/`.jpg`.
+
+**`ingestion_jobs` table không có row sau khi chạy**
+— Đang dùng `FileMetadataStore` hoặc `InMemoryMetadataStore` (test mode). Hai store này có `record_job()` là no-op. Chỉ `SQLMetadataStore` ghi vào PostgreSQL thật. Set `METADATA_STORE=postgres` và `docker compose up postgres` để test đầy đủ.
 
 ---
 

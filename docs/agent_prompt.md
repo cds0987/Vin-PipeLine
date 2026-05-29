@@ -25,23 +25,33 @@ utils/storage.py            ✅ read_binary S3/local, boto3 credential chain
 utils/notifier.py           ✅ Kafka publish với lazy producer, thread-safe
 utils/ai_provider.py        ✅ AIProvider Protocol + OpenAIProvider + MockAIProvider
 utils/stores.py             ✅ QdrantStore + InMemoryVectorStore
-                               SQLMetadataStore + FileMetadataStore + InMemoryMetadataStore
+                               SQLMetadataStore (tables: documents, document_permissions,
+                                 document_chunks, ingestion_jobs)
+                               FileMetadataStore + InMemoryMetadataStore (no-op chunks/jobs)
+                               MetadataStore Protocol: upsert, update_status, upsert_permission,
+                                 get_permission, upsert_chunks, record_job
 utils/validator.py          ✅ validate Kafka payload → DLQ nếu fail
 utils/mapper.py             ✅ DocumentUploaded → IngestJob
-models/ingest_job.py        ✅ IngestJob, ChunkResult, PermissionModel, DocumentRecord
+models/ingest_job.py        ✅ IngestJob, ChunkResult, PermissionModel
+                               DocumentRecord (id, file_path, file_type, document_type,
+                                 title, description, total_chunks, uploaded_at, processed_at)
 models/events.py            ✅ DocumentUploaded, EmbeddingDone, IndexingFailed
 pipeline/01_parse.py        ✅ PDF/DOCX/TXT/HTML/Image (pypdf, python-docx, OCR)
-pipeline/02_clean.py        ✅ normalize text
-pipeline/03_chunk.py        ✅ sliding window với overlap
-pipeline/04_embed.py        ✅ batch embed qua AIProvider
+pipeline/02_clean.py        ✅ normalize text (CRLF, whitespace, newlines)
+pipeline/03_chunk.py        ✅ tiktoken BPE sliding window (CHUNK_SIZE=512, CHUNK_OVERLAP=64)
+pipeline/04_embed.py        ✅ batch embed qua AIProvider (batch_size=32)
 pipeline/05_index.py        ✅ upsert VectorDB + MetadataDB + PermissionStore
-pipeline/run.py             ✅ orchestrate 5 bước, trả dict stats
+                               + upsert_chunks (SQL citation metadata)
+                               + record_job (ingestion history)
+                               + update_processed (total_chunks, processed_at)
+pipeline/run.py             ✅ orchestrate 5 bước, guard empty text → ValueError,
+                               record_job(failed) on exception, trả dict stats
 retrieval/service.py        ✅ vector search + permission filter (5 rules)
 streaming/kafka_consumer.py ✅ consume → validate → retry 3x → DLQ; manual offset commit
 api/main.py                 ✅ POST /ingest, POST /retrieve-context, GET /health
 adapters/file_adapter.py    ✅ file_path → IngestJob
 adapters/kafka_adapter.py   ✅ raw Kafka event → IngestJob
-tests/                      ✅ 17 tests, CI green (pytest + docker-test)
+tests/                      ✅ 17 tests, CI green (pytest + docker-test + qdrant-integration)
 ```
 
 ---
@@ -77,6 +87,8 @@ Day 12: api/main.py
 ✅ Pipeline idempotent — gọi delete(doc_id) trước khi index
 ✅ DLQ cho mọi lỗi — không drop event, không raise exception thoát consumer
 ✅ Retrieval filter permission trước khi trả contexts[]
+✅ Parse ra empty text → raise ValueError (không silent index 0 chunks)
+✅ Mọi pipeline run đều ghi ingestion_jobs record (success + failed)
 
 ❌ Không import openai / chromadb / psycopg2 trực tiếp trong pipeline/
 ❌ Không hardcode URL, model name, credential trong code

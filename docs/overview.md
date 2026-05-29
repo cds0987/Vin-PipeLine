@@ -56,13 +56,14 @@ Input (PDF / DOCX / PPTX / TXT / MD / HTML / Image)
    02_clean      ─── loại noise, normalize (rule-based)
         │
         ▼
-   03_chunk      ─── sliding window (CHUNK_SIZE=512 tokens, CHUNK_OVERLAP=64 default)
+   03_chunk      ─── tiktoken BPE sliding window (CHUNK_SIZE=512, CHUNK_OVERLAP=64)
         │
         ▼
-   04_embed      ─── AIProvider.embed()
+   04_embed      ─── AIProvider.embed() — batch 32 chunks/request
         │
         ▼
    05_index      ─── VectorStore.upsert() + MetadataStore.upsert()
+                     MetadataStore.upsert_chunks() + MetadataStore.record_job()
 ```
 
 ---
@@ -152,6 +153,8 @@ class MetadataStore(Protocol):
     def update_status(self, doc_id: str, status: str) -> None: ...
     def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None: ...
     def get_permission(self, doc_id: str) -> PermissionModel | None: ...
+    def upsert_chunks(self, chunks: list[ChunkResult]) -> None: ...      # lưu chunk metadata vào SQL
+    def record_job(self, doc_id, status, chunk_count, ...) -> None: ...  # lưu ingestion job history
 
 # Implementations — thêm class mới khi SA đổi stack, pipeline không đổi
 class QdrantStore(VectorStore): ...             # default (local + cloud)
@@ -282,15 +285,18 @@ GET /health
 
 ```sql
 documents (
-  id              TEXT PRIMARY KEY,        -- doc_id từ Kafka event (UUID string)
+  id              TEXT PRIMARY KEY,        -- doc_id từ Kafka event
   file_path       TEXT NOT NULL,           -- s3://... hoặc /local/path
   file_name       TEXT,
   file_type       TEXT,                    -- pdf | docx | txt | html | image (format kỹ thuật)
   document_type   TEXT DEFAULT 'general',  -- policy | contract | manual (phân loại nghiệp vụ)
+  title           TEXT,                    -- tiêu đề hiển thị (optional)
+  description     TEXT,
   language        TEXT DEFAULT 'vi',
   status          TEXT DEFAULT 'pending',  -- pending | indexing | indexed | failed
   uploaded_by     TEXT,
   org_id          TEXT,
+  total_chunks    INT,                     -- cập nhật sau khi index xong
   uploaded_at     TIMESTAMP,               -- khi user upload file
   processed_at    TIMESTAMP,               -- khi pipeline hoàn thành
   updated_at      TIMESTAMP
@@ -304,6 +310,30 @@ document_permissions (
   allowed_roles   JSONB DEFAULT '[]',      -- list of role name strings (từ BE)
   allowed_users   JSONB DEFAULT '[]',      -- list of user_id strings (từ BE)
   updated_at      TIMESTAMP
+)
+
+document_chunks (
+  chunk_id        TEXT PRIMARY KEY,        -- = chunk_id trong Qdrant (link key)
+  doc_id          TEXT NOT NULL,
+  chunk_index     INT NOT NULL,
+  content         TEXT NOT NULL,
+  page_start      INT,
+  page_end        INT,
+  section         TEXT,
+  token_count     INT,
+  created_at      TIMESTAMP
+)
+
+ingestion_jobs (
+  id              TEXT PRIMARY KEY,        -- UUID tự sinh
+  doc_id          TEXT NOT NULL,
+  status          TEXT NOT NULL,           -- indexing | indexed | failed
+  chunk_count     INT DEFAULT 0,
+  embedding_model TEXT,
+  duration_seconds FLOAT,
+  error_message   TEXT,
+  started_at      TIMESTAMP NOT NULL,
+  finished_at     TIMESTAMP
 )
 ```
 
@@ -360,10 +390,13 @@ class DocumentRecord(BaseModel): # DB record — documents table
     file_name: str | None = None
     file_type: str | None = None # format kỹ thuật: pdf | docx | txt | html | image
     document_type: str = "general"
+    title: str | None = None
+    description: str | None = None
     language: str = "vi"
     status: str = "pending"      # pending | indexing | indexed | failed
     uploaded_by: str | None = None
     org_id: str | None = None
+    total_chunks: int | None = None   # cập nhật sau khi index xong
     uploaded_at: datetime        # khi user upload
     processed_at: datetime | None = None  # khi pipeline xong
     updated_at: datetime
@@ -404,6 +437,9 @@ class ChunkResult(BaseModel):    # Output Port — contract bất biến
 ✅ Pipeline idempotent — ingest lại cùng doc_id không sinh chunk trùng
 ✅ Retrieval Service filter permission trước khi trả contexts[]
 ✅ schema_version trong mọi Kafka event
+✅ Parse ra empty text → raise ValueError, không báo "indexed" với chunk_count=0
+✅ Mọi lần chạy pipeline đều ghi record vào ingestion_jobs (cả success lẫn failed)
+✅ Chunk metadata (citation: trang, section) được lưu trong document_chunks SQL — không chỉ Qdrant
 
 ❌ Không import openai / chromadb / psycopg2 trực tiếp trong pipeline/
 ❌ Không hardcode model name hay AI_BASE_URL trong pipeline code
