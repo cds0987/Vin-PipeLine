@@ -51,8 +51,10 @@ class QdrantStore:
         from qdrant_client.models import Distance, VectorParams
 
         self._uuid = _uuid
-        if settings.QDRANT_URL:
-            self._client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
+        qdrant_url = settings.QDRANT_URL or None
+        qdrant_api_key = settings.QDRANT_API_KEY or None
+        if qdrant_url:
+            self._client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         else:
             self._client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
 
