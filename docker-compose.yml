@@ -81,9 +81,23 @@ services:
       dockerfile: docker/Dockerfile.test
     environment:
       - AI_PROVIDER=mock
-      - VECTOR_STORE=memory
+      - VECTOR_STORE=qdrant
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_COLLECTION=ci-docker-test
+      - EMBEDDING_DIM=32
       - METADATA_STORE=memory
-    command: ["pytest", "-q", "-m", "not integration and not qdrant and not minio"]
+      - USE_S3=false
+      - MINIO_TEST_ENDPOINT=http://minio:9000
+      - MINIO_TEST_BUCKET=rag-pipeline-local
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["pytest", "-q", "-m", "not integration"]
 
 volumes:
   minio_data:
