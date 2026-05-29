@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vin-pipeline-config
+  namespace: default
+data:
+  AI_PROVIDER: "mock"
+  VECTOR_STORE: "qdrant"
+  QDRANT_HOST: "qdrant"
+  QDRANT_PORT: "6333"
+  QDRANT_COLLECTION: "documents"
+  EMBEDDING_DIM: "1536"
+  METADATA_STORE: "postgres"
+  USE_S3: "false"
+  SCAN_PREFIX: ""
+  SCAN_INTERVAL_SECONDS: "300"
+  SCAN_MAX_WORKERS: "4"
+  CHUNK_SIZE: "512"
+  CHUNK_OVERLAP: "64"
+  SEARCH_SCORE_THRESHOLD: "0.5"
+  SEARCH_QUERY_MAX_LENGTH: "2000"
