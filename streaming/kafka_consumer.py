@@ -4,7 +4,7 @@ import argparse
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from adapters.kafka_adapter import KafkaAdapter
 from config import settings
@@ -29,11 +29,12 @@ def _build_consumer(topic: str, group_id: str) -> KafkaConsumer:
         value_deserializer=lambda value: json.loads(value.decode("utf-8")),
         group_id=group_id,
         auto_offset_reset="earliest",
-        enable_auto_commit=True,
+        enable_auto_commit=False,
     )
 
 
 def _send_pipeline_dlq(raw_event: dict, reason: str, attempt: int) -> None:
+    now = datetime.now(timezone.utc)
     payload = {
         "event": settings.TOPIC_DLQ,
         "schema_version": raw_event.get("schema_version", "1.0"),
@@ -41,11 +42,11 @@ def _send_pipeline_dlq(raw_event: dict, reason: str, attempt: int) -> None:
         "attempt": attempt,
         "details": reason,
         "raw": raw_event,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now.isoformat(),
     }
     notify(settings.TOPIC_DLQ, payload)
     write_dlq_file(
-        f"pipeline_error_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}.json",
+        f"pipeline_error_{now.strftime('%Y%m%d_%H%M%S_%f')}.json",
         json.dumps(payload, ensure_ascii=False, indent=2),
     )
 
@@ -72,6 +73,7 @@ def start(topic: str | None = None, group_id: str | None = None) -> None:
     log.info("consumer started topic=%s bootstrap=%s", topic or settings.TOPIC_INGEST, settings.KAFKA_BOOTSTRAP)
     for message in consumer:
         process_event(message.value)
+        consumer.commit()
 
 
 def run() -> None:

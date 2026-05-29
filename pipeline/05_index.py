@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from models.ingest_job import ChunkResult, DocumentRecord, IngestJob
@@ -24,8 +24,8 @@ def run(
         status="indexing",
         uploaded_by=(job.permission.owner_id if job.permission else None),
         org_id=(job.permission.org_id if job.permission else None),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     metadata_store.upsert(record)
     if job.permission:

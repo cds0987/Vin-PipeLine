@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config import settings
 from models.events import EmbeddingDone, IndexingFailed
@@ -34,7 +34,7 @@ def notify(topic: str, payload: dict) -> None:
         **payload,
         "event": payload.get("event", topic),
         "schema_version": payload.get("schema_version", "1.0"),
-        "emitted_at": datetime.utcnow().isoformat(),
+        "emitted_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
         producer = _get_producer()

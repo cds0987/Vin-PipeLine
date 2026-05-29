@@ -24,7 +24,7 @@ class _HTMLTextExtractor(HTMLParser):
 
 def _parse_pdf(file_bytes: bytes) -> str:
     import io
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(file_bytes))
     return "\n".join((page.extract_text() or "").strip() for page in reader.pages).strip()

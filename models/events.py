@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
@@ -23,7 +23,7 @@ class DocumentUploaded(BaseModel):
     org_id: str | None = None
     metadata: EventMetadata = Field(default_factory=EventMetadata)
     permission: PermissionModel | None = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class EmbeddingDone(BaseModel):
@@ -31,7 +31,7 @@ class EmbeddingDone(BaseModel):
     schema_version: str = "1.0"
     doc_id: str
     chunk_count: int
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class IndexingFailed(BaseModel):
@@ -39,4 +39,4 @@ class IndexingFailed(BaseModel):
     schema_version: str = "1.0"
     doc_id: str
     reason: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

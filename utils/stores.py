@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 from abc import abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
 from config import settings
 from models.ingest_job import ChunkResult, DocumentRecord, PermissionModel
+
+log = logging.getLogger(__name__)
 
 
 class VectorStore(Protocol):
@@ -200,15 +203,15 @@ class SQLMetadataStore:
                         status=status,
                         uploaded_by=None,
                         org_id=None,
-                        created_at=datetime.utcnow(),
-                        updated_at=datetime.utcnow(),
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc),
                     )
                 )
                 return
             conn.execute(
                 self._documents.update()
                 .where(self._documents.c.doc_id == doc_id)
-                .values(status=status, updated_at=datetime.utcnow())
+                .values(status=status, updated_at=datetime.now(timezone.utc))
                 )
 
     def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None:
@@ -216,7 +219,7 @@ class SQLMetadataStore:
 
         payload = permission.model_dump()
         payload["doc_id"] = doc_id
-        payload["updated_at"] = datetime.utcnow()
+        payload["updated_at"] = datetime.now(timezone.utc)
         with self._engine.begin() as conn:
             conn.execute(delete(self._permissions).where(self._permissions.c.doc_id == doc_id))
             conn.execute(self._permissions.insert().values(**payload))
@@ -266,7 +269,7 @@ class FileMetadataStore:
         doc = docs.get(doc_id, {})
         doc["doc_id"] = doc_id
         doc["status"] = status
-        doc["updated_at"] = datetime.utcnow().isoformat()
+        doc["updated_at"] = datetime.now(timezone.utc).isoformat()
         docs[doc_id] = doc
         self._write_json(self._documents_file, docs)
 
@@ -281,19 +284,44 @@ class FileMetadataStore:
         return PermissionModel(**payload) if payload else None
 
 
+class InMemoryMetadataStore:
+    def __init__(self) -> None:
+        self._documents: dict[str, DocumentRecord] = {}
+        self._permissions: dict[str, PermissionModel] = {}
+
+    def upsert(self, doc: DocumentRecord) -> None:
+        self._documents[doc.doc_id] = doc
+
+    def update_status(self, doc_id: str, status: str) -> None:
+        if doc_id in self._documents:
+            self._documents[doc_id] = self._documents[doc_id].model_copy(update={"status": status})
+        else:
+            self._documents[doc_id] = DocumentRecord(doc_id=doc_id, file_uri="", status=status)
+
+    def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None:
+        self._permissions[doc_id] = permission
+
+    def get_permission(self, doc_id: str) -> PermissionModel | None:
+        return self._permissions.get(doc_id)
+
+
 def build_vector_store() -> VectorStore:
     if settings.VECTOR_STORE == "memory":
         return InMemoryVectorStore()
     try:
         return ChromaStore()
-    except Exception:
+    except Exception as exc:
+        log.warning("ChromaStore unavailable (%s), falling back to InMemoryVectorStore", exc)
         return InMemoryVectorStore()
 
 
 def build_metadata_store() -> MetadataStore:
     if settings.METADATA_STORE == "memory":
+        return InMemoryMetadataStore()
+    if settings.METADATA_STORE == "file":
         return FileMetadataStore()
     try:
         return SQLMetadataStore()
-    except Exception:
+    except Exception as exc:
+        log.warning("SQLMetadataStore unavailable (%s), falling back to FileMetadataStore", exc)
         return FileMetadataStore()

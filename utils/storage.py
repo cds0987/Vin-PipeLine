@@ -9,12 +9,12 @@ from config import settings
 def _s3_client():
     import boto3
 
-    return boto3.client(
-        "s3",
-        endpoint_url=settings.S3_ENDPOINT,
-        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-    )
+    kwargs: dict = {"endpoint_url": settings.S3_ENDPOINT}
+    if settings.AWS_ACCESS_KEY_ID:
+        kwargs["aws_access_key_id"] = settings.AWS_ACCESS_KEY_ID
+    if settings.AWS_SECRET_ACCESS_KEY:
+        kwargs["aws_secret_access_key"] = settings.AWS_SECRET_ACCESS_KEY
+    return boto3.client("s3", **kwargs)
 
 
 def _read_s3_bytes(file_uri: str) -> bytes:

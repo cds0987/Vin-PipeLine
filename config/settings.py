@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     s3_bucket: str = "rag-pipeline-local"
     use_s3: bool = False
     s3_endpoint: str = "http://minio:9000"
-    aws_access_key_id: str = "minioadmin"
-    aws_secret_access_key: str = "minioadmin"
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
 
     kafka_bootstrap: str = "kafka:9092"
     topic_ingest: str = "DocumentUploaded"
@@ -95,8 +95,8 @@ DB_URL = _settings.database_url
 S3_BUCKET = _settings.s3_bucket
 USE_S3 = _settings.use_s3
 S3_ENDPOINT = _settings.s3_endpoint
-AWS_ACCESS_KEY_ID = _settings.aws_access_key_id
-AWS_SECRET_ACCESS_KEY = _settings.aws_secret_access_key
+AWS_ACCESS_KEY_ID: str | None = _settings.aws_access_key_id
+AWS_SECRET_ACCESS_KEY: str | None = _settings.aws_secret_access_key
 
 KAFKA_BOOTSTRAP = _settings.kafka_bootstrap
 TOPIC_INGEST = _settings.topic_ingest

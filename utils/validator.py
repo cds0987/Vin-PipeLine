@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
@@ -21,11 +21,11 @@ def validate_document_uploaded(raw: dict) -> DocumentUploaded | None:
             "reason": "schema_error",
             "details": exc.errors(),
             "raw": raw,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         notify(settings.TOPIC_DLQ, payload)
         write_dlq_file(
-            f"schema_error_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}.json",
+            f"schema_error_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}.json",
             json.dumps(payload, ensure_ascii=False, indent=2),
         )
         return None
