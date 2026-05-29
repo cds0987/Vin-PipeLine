@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from config import settings
 from models.ingest_job import ChunkResult, DocumentRecord, IngestJob
 from utils.stores import MetadataStore, VectorStore
 
@@ -12,9 +13,14 @@ def run(
     job: IngestJob,
     vector_store: VectorStore,
     metadata_store: MetadataStore,
+    embedding_model: str = "",
+    duration_seconds: float = 0.0,
 ) -> dict:
+    now = datetime.now(timezone.utc)
+
     vector_store.delete(job.doc_id)
     metadata_store.update_status(job.doc_id, "indexing")
+
     record = DocumentRecord(
         id=job.doc_id,
         file_path=job.file_uri,
@@ -25,14 +31,32 @@ def run(
         status="indexing",
         uploaded_by=(job.permission.owner_id if job.permission else None),
         org_id=(job.permission.org_id if job.permission else None),
-        uploaded_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        uploaded_at=now,
+        updated_at=now,
     )
     metadata_store.upsert(record)
+
     if job.permission:
         metadata_store.upsert_permission(job.doc_id, job.permission)
+
     vector_store.upsert(chunks)
+    metadata_store.upsert_chunks(chunks)
+
+    processed_at = datetime.now(timezone.utc)
     metadata_store.update_status(job.doc_id, "indexed")
+
+    # update processed_at + total_chunks nếu store hỗ trợ (SQLMetadataStore)
+    if hasattr(metadata_store, "update_processed"):
+        metadata_store.update_processed(job.doc_id, len(chunks), processed_at)
+
+    metadata_store.record_job(
+        doc_id=job.doc_id,
+        status="indexed",
+        chunk_count=len(chunks),
+        embedding_model=embedding_model or settings.EMBED_MODEL,
+        duration_seconds=duration_seconds,
+    )
+
     return {
         "doc_id": job.doc_id,
         "status": "indexed",

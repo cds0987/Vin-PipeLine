@@ -1,0 +1,10 @@
+Endpoints
+Tất cả các OpenAPI cung cấp trên nhiều môi trường khác nhau. Hiện tại, có các môi trường để lựa chọn khi tích hợp:
+
+Môi trường	Base URL
+Development (DEV)	https://api.dev.vsf.services
+System Integration Testing (SIT)	https://api.sit.vsf.services
+User Acceptance Testing (UAT)	https://api.uat.vsf.services
+Production (PRD)	https://api.prd.vsf.services
+Khi tích hợp, hãy gọi các endpoint được mô tả trong tài liệu thông qua base URL phù hợp với môi trường mà bạn muốn truy cập.
+Ngoại trừ một số API đặc biệt (sẽ được ghi chú ở tài liệu tương ứng), hầu hết các OpenAPI sẽ bắt đầu bằng path /open/.

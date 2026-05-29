@@ -1,0 +1,3 @@
+Intro
+Open Platform là nền tảng mở cung cấp tài liệu hướng dẫn tích hợp với các nền tảng của PTNT VSF. Tài liệu này giới thiệu tổng quan về cách tích hợp, các module chủ đạo mà Open Platform hỗ trợ bao gồm: V-ID, Martech, Notification Center, Miniapp Container và nhiều module khác. Nhà phát triển có thể sử dụng các hướng dẫn này để kết nối và sử dụng dịch vụ từ từng module một cách hiệu quả trong hệ sinh thái của VSF.
+

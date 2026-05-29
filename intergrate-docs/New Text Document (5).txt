@@ -1,0 +1,219 @@
+Android
+Yêu cầu hệ thống
+Android API 24+ (minSdk)
+Kotlin 1.8+
+Android Gradle Plugin 8.0+
+Cài đặt
+Gradle (Kotlin DSL)
+Thêm repository JFrog vào file build.gradle.kts hoặc settings.gradle.kts ở thư mục gốc:
+
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url = uri("https://jfrog.vinsmartfuture.tech/artifactory/vsf-ptnt-maven-local/mobile/")
+            credentials {
+                username = providers.gradleProperty("jfrogUsername").orNull
+                    ?: System.getenv("JFROG_USERNAME")
+                password = providers.gradleProperty("jfrogToken").orNull
+                    ?: System.getenv("JFROG_ACCESS_TOKEN")
+            }
+        }
+    }
+}
+
+
+Thêm dependency vào file build.gradle.kts của ứng dụng:
+
+dependencies {
+    implementation("vn.vsf.sdk:vid:0.1.4")
+}
+
+Thiết lập
+1. Cấu hình Scheme Chuyển hướng (Redirect Scheme)
+Trong file build.gradle.kts của ứng dụng, thêm manifest placeholder cho scheme của URI chuyển hướng (redirect URI):
+
+android {
+    defaultConfig {
+        manifestPlaceholders["vidRedirectScheme"] = "yourapp"
+    }
+}
+
+Điều này thông báo cho AuthLoadingActivity của SDK để lắng nghe các chuyển hướng dạng yourapp://. Scheme này phải khớp với phần scheme trong redirectUri của bạn (ví dụ: yourapp trong yourapp://callback).
+
+2. Khởi tạo SDK
+Khởi tạo càng sớm càng tốt, thông thường trong class Application hoặc Activity chính:
+
+import vn.vsf.vid.sdk.VsfVid
+import vn.vsf.vid.sdk.VsfVidConfig
+import vn.vsf.vid.sdk.VidEnvironment
+
+class MyApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+
+        VsfVid.initialize(
+            context = this,
+            config = VsfVidConfig(
+                clientId = "your_client_id",
+                redirectUri = "yourapp-dev://callback",
+                environment = VidEnvironment.DEV,
+                scopes = listOf("openid", "profile", "email", "phone", "offline"),
+                // authorizationUrl = "https://your-backend.com/auth" // Tùy chọn: xem phần `authorizationUrl` bên dưới
+            )
+        )
+    }
+}
+
+
+Lưu ý về authorizationUrl: Tham số này là tùy chọn và được dùng khi backend của bạn tự tạo URL ủy quyền (xem Phương án 2 bên dưới).
+
+Môi trường (Environments):
+
+Môi trường	Server Ủy quyền (Authorization Server)	Server Token (Token Server)
+DEV	auth.dev.vsf.services	api.dev.vsf.services
+SIT	auth.sit.vsf.services	api.sit.vsf.services
+UAT	auth.uat.vsf.services	api.uat.vsf.services
+PRODUCTION (mặc định)	auth.v-app.vn	api.v-app.vn
+Lưu ý: redirectUri nên khác nhau cho từng môi trường (ví dụ: yourapp-dev://callback, yourapp://callback cho production). Hãy cập nhật manifestPlaceholders["vidRedirectScheme"] tương ứng cho từng build variant, và đăng ký mỗi scheme trên V-ID.
+
+Cách sử dụng
+Đăng nhập (SSO)
+V-ID SDK hỗ trợ 2 phương thức đăng nhập — chọn 1 trong 2 tùy theo cách backend của bạn xử lý URL ủy quyền. Xem Sơ đồ luồng Authorization Code + PKCE để hiểu rõ quy trình.
+
+Phương án 1 — Trao đổi Token tại Client: SDK tự tạo URL ủy quyền (kèm PKCE) và trực tiếp đổi mã code lấy token. Phù hợp khi app tự quản lý token.
+Phương án 2 — authorizationUrl do Backend tạo: Backend tự tạo toàn bộ URL ủy quyền; SDK chỉ mở URL và lắng nghe callback. Phù hợp khi backend cần gắn state/nonce tùy chỉnh hoặc tự đổi token.
+Phương án 1 — Trao đổi Token tại Client
+import vn.vsf.vid.sdk.VsfVid
+import vn.vsf.vid.sdk.model.AuthorizationResponse
+import vn.vsf.vid.sdk.model.TokenResponse
+import vn.vsf.vid.sdk.VidError
+
+// Bước 1: Ủy quyền — mở trình duyệt, trả về authorization response
+VsfVid.authorize(activity = this) { result ->
+    result.onSuccess { authResponse: AuthorizationResponse ->
+        // Bước 2: Đổi mã (code) lấy token
+        VsfVid.exchangeToken(authResponse = authResponse) { tokenResult ->
+            tokenResult.onSuccess { tokens: TokenResponse ->
+                Log.d("VID", "Access Token: ${tokens.accessToken}")
+                Log.d("VID", "Refresh Token: ${tokens.refreshToken}")
+                Log.d("VID", "ID Token: ${tokens.idToken}")
+                Log.d("VID", "Expires In: ${tokens.expiresIn}s")
+                Log.d("VID", "Scope: ${tokens.scope}")
+
+                // Lưu trữ token an toàn (ví dụ: EncryptedSharedPreferences)
+
+            }.onFailure { error ->
+                Log.e("VID", "Đổi token thất bại: $error")
+            }
+        }
+
+    }.onFailure { error ->
+        Log.e("VID", "Ủy quyền thất bại: $error")
+    }
+}
+
+SDK sẽ:
+
+Tạo một mã kiểm tra PKCE (code verifier) và mã thách thức (challenge)
+Mở Chrome Custom Tabs đến trang đăng nhập V-ID
+Người dùng xác thực (hoặc bỏ qua nếu đã có phiên SSO)
+AuthLoadingActivity bắt được luồng chuyển hướng
+Trả về AuthorizationResponse qua callback trên luồng chính (main thread)
+Khi gọi exchangeToken(), thực hiện POST đến endpoint token trên luồng nền (background thread) và trả về TokenResponse
+Phương án 2 — authorizationUrl do Backend tạo
+Nếu backend của bạn tạo URL ủy quyền (ví dụ: để gắn thêm các biến state hoặc nonce tùy chỉnh), hãy truyền URL này qua VsfVidConfig trong lúc khởi tạo:
+
+// 1. Khởi tạo với URL xây dựng sẵn
+VsfVid.initialize(
+    context = this,
+    config = VsfVidConfig(
+        clientId = "your_client_id",
+        redirectUri = "yourapp-dev://callback",
+        authorizationUrl = "https://your-backend.com/auth?..." // URL tùy chỉnh của bạn
+    )
+)
+
+// 2. Bắt đầu ủy quyền
+VsfVid.authorize(activity = this) { result ->
+    result.onSuccess { authResponse ->
+        // Xử lý response
+    }.onFailure { error ->
+        Log.e("VID", "Ủy quyền thất bại: $error")
+    }
+}
+
+
+SDK sẽ mở chính xác URL này mà không gắn thêm tham số PKCE, nhưng vẫn tiếp tục lắng nghe callback chuyển hướng của bạn.
+
+Làm mới Token (Refresh Token)
+Khi access token hết hạn, sử dụng refresh token:
+
+VsfVid.refreshToken(refreshToken = storedRefreshToken) { result ->
+    result.onSuccess { tokens ->
+        // Cập nhật token đã lưu
+        Log.d("VID", "Access Token mới: ${tokens.accessToken}")
+    }.onFailure { error ->
+        when (error) {
+            is VidError.TokenExchangeFailed -> {
+                // Refresh token đã hết hạn — chuyển hướng đăng nhập lại
+                Log.w("VID", "Làm mới thất bại, vui lòng xác thực lại")
+            }
+            else -> Log.e("VID", "Lỗi: $error")
+        }
+    }
+}
+
+Tắt SDK (Shutdown)
+Dọn dẹp khi SDK không còn được sử dụng:
+
+VsfVid.shutdown()
+
+Xử lý Lỗi
+Tất cả các lỗi được trả về dưới dạng lớp VidError:
+
+VsfVid.authorize(activity = this) { result ->
+    result.onFailure { error ->
+        when (error) {
+            is VidError.NotInitialized -> {
+                // SDK chưa được khởi tạo — gọi initialize() trước
+            }
+            is VidError.InvalidConfig -> {
+                // Cấu hình không hợp lệ
+            }
+            is VidError.AuthCancelled -> {
+                // Người dùng đã đóng trình duyệt
+            }
+            is VidError.AuthFailed -> {
+                // Authorization server trả về lỗi
+                Log.e("VID", "Ủy quyền thất bại: ${error.message}")
+            }
+            is VidError.InvalidState -> {
+                // State không khớp — có thể là tấn công CSRF
+            }
+            is VidError.TokenExchangeFailed -> {
+                // Quá trình đổi mã (code) lấy token thất bại
+                Log.e("VID", "Đổi token thất bại: ${error.message}")
+            }
+            is VidError.NetworkError -> {
+                // Vấn đề kết nối mạng
+                Log.e("VID", "Lỗi mạng", error.cause)
+            }
+            is VidError.InvalidResponse -> {
+                // Định dạng response từ server không như mong đợi
+            }
+        }
+    }
+}
+
+Khắc phục sự cố
+Chrome Custom Tab không mở được
+Đảm bảo thiết bị đã cài đặt Chrome hoặc một trình duyệt hỗ trợ Custom Tabs
+Kiểm tra lại xem androidx.browser:browser đã được resolve trong danh sách dependency chưa
+Không nhận được Callback sau khi đăng nhập
+Xác minh manifestPlaceholders["vidRedirectScheme"] có khớp với scheme trong URI chuyển hướng (redirect URI) không
+Kiểm tra redirectUri có khớp chính xác với uri đã đăng ký trên V-ID hay không
+Đảm bảo AuthLoadingActivity không bị lọc mất do quá trình gộp manifest (manifest merger)
+Làm mới Token báo lỗi invalid_grant
+Refresh token đã hết hạn hoặc bị thu hồi. Hãy chuyển hướng người dùng đến trang đăng nhập lại thông qua authorize().

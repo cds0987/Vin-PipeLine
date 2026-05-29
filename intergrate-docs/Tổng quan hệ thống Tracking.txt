@@ -1,0 +1,17 @@
+Tổng quan hệ thống Tracking
+Hệ thống Tracking (V-Tracking) cho phép thu thập và gửi dữ liệu sự kiện (events) từ ứng dụng lên nền tảng phân tích. Hệ thống sử dụng Snowplow làm SDK thu thập sự kiện, giúp theo dõi hành vi người dùng, tối ưu trải nghiệm và hỗ trợ phân tích dữ liệu trong hệ sinh thái VSF.
+
+Thông tin chung
+Tracking Domain & Path
+Environment	API_URL
+DEV	https://api.dev.vsf.services/tracking/events/com.snowplowanalytics.snowplow/tp2
+SIT	https://api.sit.vsf.services/tracking/events/com.snowplowanalytics.snowplow/tp2
+UAT	https://api.uat.vsf.services/tracking/events/com.snowplowanalytics.snowplow/tp2
+PRODUCTION	https://tracking.v-app.vn/tracking/events/com.snowplowanalytics.snowplow/tp2
+Lưu ý: Đảm bảo gọi đúng endpoint theo môi trường (DEV/SIT/UAT/PRODUCTION) để dữ liệu tracking được gửi đến đúng hệ thống xử lý.
+
+Previous
+V-Tracking
+Next
+Tích hợp
+Thông tin chung

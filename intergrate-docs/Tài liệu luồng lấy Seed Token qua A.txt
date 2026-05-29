@@ -1,0 +1,268 @@
+Tài liệu luồng lấy Seed Token qua App Mesh SDK trên Android
+1. Tổng quan
+
+Sơ đồ mô tả cơ chế Duhat App yêu cầu lấy Seed Token thông qua App Mesh SDK.
+Trước khi SDK trả token cho app, SDK cần kiểm tra chữ ký ứng dụng với Android OS để đảm bảo request đến từ app hợp lệ.
+
+Các thành phần:
+
+Thành phần	Vai trò
+Duhat App	Ứng dụng yêu cầu lấy Seed Token
+App Mesh SDK	SDK trung gian quản lý và cấp Seed Token
+Android OS	Cung cấp thông tin chữ ký app để SDK kiểm tra
+Seed Token	Token dùng cho luồng cross-app login hoặc SSO
+
+Mục tiêu:
+
+Chỉ app có chữ ký hợp lệ mới được lấy Seed Token.
+Ngăn app giả mạo gọi SDK để lấy token.
+SDK là lớp kiểm soát quyền truy cập token.
+2. Luồng xử lý
+Bước 1: Duhat App yêu cầu lấy Seed Token
+
+Duhat App gọi App Mesh SDK:
+
+const seedToken = await AppMeshSDK.getSeedToken();
+
+Hoặc dạng native Android:
+
+val seedToken = AppMeshSdk.getSeedToken(context)
+
+Ý nghĩa:
+
+Duhat App -> App Mesh SDK:
+Yêu cầu lấy Seed Token
+Bước 2: App Mesh SDK kiểm tra chữ ký ứng dụng
+
+Sau khi nhận request, App Mesh SDK không trả token ngay.
+SDK gọi Android OS để kiểm tra chữ ký của app đang gọi.
+
+App Mesh SDK -> Android OS:
+Kiểm tra chữ ký
+
+SDK có thể lấy thông tin:
+
+Package name
+Signing certificate
+SHA-256 fingerprint
+App signature
+UID của app gọi SDK
+
+Ví dụ logic:
+
+val packageName = context.packageName
+val signatureHash = getAppSignatureSha256(context, packageName)
+3. Nhánh xử lý alt
+
+Sơ đồ có khối alt, nghĩa là có 2 trường hợp xử lý.
+
+Trường hợp A: Chữ ký khớp
+
+Nếu chữ ký của Duhat App khớp với danh sách chữ ký được phép:
+
+[Chữ ký khớp]
+
+Android OS trả kết quả hợp lệ cho App Mesh SDK:
+
+Android OS -> App Mesh SDK:
+Hợp lệ
+
+Sau đó App Mesh SDK trả Seed Token về Duhat App:
+
+App Mesh SDK -> Duhat App:
+Trả về Token
+
+Kết quả:
+
+{
+  "success": true,
+  "seedToken": "seed_token_value"
+}
+Trường hợp B: Chữ ký không khớp
+
+Nếu chữ ký không nằm trong danh sách được phép:
+
+[Chữ ký không khớp]
+
+Android OS hoặc SDK xác định request không hợp lệ:
+
+Android OS -> App Mesh SDK:
+Không hợp lệ
+
+App Mesh SDK từ chối trả token:
+
+App Mesh SDK -> Duhat App:
+Từ chối truy cập
+
+Kết quả lỗi:
+
+{
+  "success": false,
+  "error": "signature_mismatch"
+}
+4. Sequence dạng text
+1. Duhat App -> App Mesh SDK:
+   Yêu cầu lấy Seed Token.
+
+2. App Mesh SDK -> Android OS:
+   Kiểm tra chữ ký app.
+
+3A. Nếu chữ ký khớp:
+    Android OS -> App Mesh SDK:
+    Trả kết quả hợp lệ.
+
+4A. App Mesh SDK -> Duhat App:
+    Trả về Seed Token.
+
+3B. Nếu chữ ký không khớp:
+    Android OS -> App Mesh SDK:
+    Trả kết quả không hợp lệ.
+
+4B. App Mesh SDK -> Duhat App:
+    Từ chối truy cập.
+5. API / SDK đề xuất
+5.1. Duhat App gọi lấy Seed Token
+val result = AppMeshSdk.getSeedToken(context)
+
+if (result.success) {
+    val seedToken = result.seedToken
+} else {
+    handleError(result.error)
+}
+5.2. Response thành công
+{
+  "success": true,
+  "seedToken": "seed_token_value",
+  "expiresIn": 300
+}
+5.3. Response thất bại
+{
+  "success": false,
+  "error": "access_denied",
+  "message": "Application signature is not trusted"
+}
+6. Kiểm tra chữ ký Android
+6.1. Danh sách chữ ký hợp lệ
+
+App Mesh SDK hoặc App Mesh Backend nên có danh sách chữ ký được phép.
+
+Ví dụ:
+
+{
+  "allowedApps": [
+    {
+      "packageName": "com.duhat.app",
+      "sha256CertFingerprint": "AA:BB:CC:DD:..."
+    }
+  ]
+}
+
+SDK kiểm tra:
+
+packageName == allowed.packageName
+signatureSha256 == allowed.sha256CertFingerprint
+6.2. Pseudo code Android
+fun getSeedToken(context: Context): SeedTokenResult {
+    val packageName = context.packageName
+    val signatureHash = getSignatureSha256(context, packageName)
+
+    val isTrusted = verifyAppSignature(
+        packageName = packageName,
+        signatureHash = signatureHash
+    )
+
+    if (!isTrusted) {
+        return SeedTokenResult(
+            success = false,
+            error = "signature_mismatch"
+        )
+    }
+
+    val seedToken = tokenStore.getSeedToken()
+
+    return SeedTokenResult(
+        success = true,
+        seedToken = seedToken
+    )
+}
+fun getSignatureSha256(context: Context, packageName: String): String {
+    val packageInfo = context.packageManager.getPackageInfo(
+        packageName,
+        PackageManager.GET_SIGNING_CERTIFICATES
+    )
+
+    val signatures = packageInfo.signingInfo.apkContentsSigners
+
+    val md = MessageDigest.getInstance("SHA-256")
+    val digest = md.digest(signatures[0].toByteArray())
+
+    return digest.joinToString(":") {
+        "%02X".format(it)
+    }
+}
+7. Lỗi thường gặp
+Lỗi	Nguyên nhân	Cách xử lý
+signature_mismatch	Chữ ký app không khớp	Kiểm tra keystore build app
+package_not_allowed	Package name chưa được whitelist	Cập nhật danh sách app được phép
+token_not_found	SDK chưa có Seed Token	Yêu cầu login lại từ app nguồn
+token_expired	Seed Token hết hạn	Refresh hoặc lấy token mới
+sdk_not_initialized	SDK chưa init	Gọi init SDK trước khi lấy token
+access_denied	App không có quyền truy cập	Kiểm tra cấu hình SDK/App Mesh
+8. Bảo mật cần lưu ý
+8.1. Không chỉ kiểm tra package name
+
+Package name có thể bị giả mạo nếu chỉ kiểm tra tên.
+Cần kiểm tra đồng thời:
+
+packageName + signing certificate fingerprint
+8.2. Seed Token không nên sống quá lâu
+
+Seed Token nên có TTL ngắn, ví dụ:
+
+3–10 phút
+
+Token này chỉ nên dùng để đổi sang session/token của app đích.
+
+8.3. Không log token
+
+Không log:
+
+Seed Token
+Access Token
+Refresh Token
+Raw signature nếu không cần thiết
+
+Có thể log:
+
+packageName
+signatureHash prefix
+requestId
+errorCode
+8.4. Phân biệt debug và release signature
+
+Cần cấu hình riêng:
+
+Môi trường	Chữ ký
+Development	Debug keystore
+Staging	Staging keystore
+Production	Release keystore
+
+Không nên dùng debug signature cho production.
+
+9. Khuyến nghị triển khai
+
+Nên thiết kế theo hướng:
+
+Duhat App yêu cầu Seed Token
+→ App Mesh SDK kiểm tra chữ ký app với Android OS
+→ Nếu hợp lệ thì trả Seed Token
+→ Nếu không hợp lệ thì từ chối truy cập
+
+App Mesh SDK nên là nơi kiểm soát:
+
+App nào được phép lấy Seed Token.
+Chữ ký nào được tin cậy.
+Token còn hạn hay không.
+Token có được trả về client hay không.
+
+Điểm quan trọng nhất trong luồng này là không trả Seed Token trước khi xác thực chữ ký ứng dụng.

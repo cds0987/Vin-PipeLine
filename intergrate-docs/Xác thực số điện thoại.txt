@@ -1,0 +1,1020 @@
+Xác thực số điện thoại
+Quy trình xác thực cho phép người dùng đăng nhập vào ứng dụng thông qua việc xác thực số điện thoại bằng mã OTP (One-Time Password) được gửi qua SMS. Quy trình này bao gồm 3 bước chính:
+
+Bước 1: Người dùng nhập số điện thoại, hệ thống gửi mã xác thực qua SMS
+Bước 2: Người dùng nhập mã xác thực đã nhận được để xác thực — response có trường user_id cho biết user đã tồn tại (user_id có giá trị) hay chưa (user_id là null)
+Bước 3: Khi user_id là null, gọi API đăng ký để tạo user mới tại V-ID trước khi tiếp tục luồng đăng nhập
+Quy trình xác thực
+Quy trình xác thực số điện thoại được minh họa như sau:
+
+V-ID
+Hermes Backend
+📱 Hermes App
+👤 Người dùng
+V-ID
+Hermes Backend
+📱 Hermes App
+👤 Người dùng
+Bước 1: Nhập số điện thoại
+Bước 2 & 3: Gửi yêu cầu mã xác thực
+Bước 4: Nhập mã xác thực
+Bước 5 & 6: Xác thực mã & Trả về user_id (nếu có)
+Bước 6a: User đã tồn tại → Đọc thông tin | User chưa tồn tại → Đăng ký
+alt
+[user_id có giá trị (user đã tồn tại)]
+[user_id là null (user chưa tồn tại)]
+Bước 7: Khởi tạo phiên làm việc riêng
+Đăng nhập thành công
+Nhập Số điện thoại (Phone Number)
+1
+POST otp request {phone}
+2
+POST /open/identity/v1/sso/verification {channel: "sms", to}
+3
+📩 Gửi mã xác thực qua SMS
+4
+Trả về { session_id, channel, to, status, attempts, created_at }
+5
+Xác nhận đã gửi mã xác thực thành công
+6
+Nhập mã xác thực từ tin nhắn SMS
+7
+POST verify {session_id, code, to}
+8
+POST /open/identity/v1/sso/verification/check {session_id, code, to}
+9
+Kiểm tra mã OTP & Hạn dùng
+10
+Trả về { session_id, status, user_id?, ... }
+11
+POST /open/identity/v1/sso/users/query {user_id}
+12
+Trả về thông tin user {name, avatar, ...}
+13
+POST /open/identity/v1/sso/users/register {session_id, name}
+14
+Tạo user mới tại V-ID
+15
+Trả về { user_id, name, created_at }
+16
+Lưu/Cập nhật User trong Hermes DB
+17
+Tạo Hermes Token (JWT/Session)
+18
+Trả về Hermes Token
+19
+Lưu Token vào Secure Storage
+20
+Bước 1: Gửi mã xác thực
+API này cho phép bạn gửi mã xác thực đến số điện thoại của người dùng qua SMS. Trước khi gọi API này, bạn cần có access token được lấy từ quy trình Authorization.
+
+Endpoint
+POST <BaseUrl>/open/identity/v1/sso/verification
+
+Request Headers
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+info
+Access token cần được lấy trước thông qua quy trình được mô tả trong Authorization.
+
+Request Body
+Tham số	Loại	Bắt buộc	Mô tả
+channel	string	Có	Kênh gửi mã xác thực: sms (hiện tại chỉ hỗ trợ SMS)
+to	string	Có	Số điện thoại (định dạng E.164, ví dụ: +84901234567)
+app_check_token	string	Không	Token để kiểm tra ứng dụng (tùy chọn)
+Ví dụ Request Body:
+
+{
+  "channel": "sms",
+  "to": "+84901234567",
+  "app_check_token": "optional-app-check-token"
+}
+
+Ví dụ cURL
+curl --location --request POST "<BaseUrl>/open/identity/v1/sso/verification" \
+  --header "Authorization: Bearer REDACTED" \
+  --header "Content-Type: application/json" \
+  --data-raw '{
+    "channel": "sms",
+    "to": "+84901234567",
+    "app_check_token": "optional-app-check-token"
+  }'
+
+
+Response thành công
+HTTP Status: 200 OK
+
+{
+  "code": 200,
+  "message": "Verification code sent successfully",
+  "data": {
+    "session_id": "session_abc123xyz",
+    "channel": "sms",
+    "to": "+84901234567",
+    "status": "pending",
+    "attempts": 0,
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+}
+
+Response lỗi
+HTTP Status: 400 Bad Request (Thông tin không hợp lệ)
+
+{
+  "code": 400,
+  "message": "Invalid channel or recipient",
+  "data": null
+}
+
+HTTP Status: 429 Too Many Requests (Gửi quá nhiều yêu cầu)
+
+{
+  "code": 429,
+  "message": "Too many verification requests. Please try again later.",
+  "data": null
+}
+
+
+Các trường trong Response Data (Bước 1)
+Trường	Loại	Mô tả
+session_id	string	ID phiên làm việc, cần sử dụng cho bước xác thực mã
+channel	string	Kênh đã sử dụng: sms
+to	string	Số điện thoại (định dạng E.164) đã gửi mã
+status	string	Trạng thái: pending (đang chờ xác thực)
+attempts	number	Số lần đã thử xác thực (ban đầu là 0)
+created_at	string	Thời gian tạo phiên xác thực (ISO 8601 format)
+Bước 2: Xác thực mã xác thực
+API này cho phép bạn xác thực mã xác thực mà người dùng đã nhập. Sau khi xác thực thành công, bạn sẽ nhận được thông tin về trạng thái xác thực.
+
+Endpoint
+POST <BaseUrl>/open/identity/v1/sso/verification/check
+
+Request Headers
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+Request Body
+Tham số	Loại	Bắt buộc	Mô tả
+session_id	string	Có	Session ID nhận được từ bước gửi mã
+code	string	Có	Mã xác thực mà người dùng đã nhập
+to	string	Có	Số điện thoại (định dạng E.164, ví dụ: +84901234567) đã gửi mã
+app_check_token	string	Không	Token để kiểm tra ứng dụng (tùy chọn)
+Ví dụ Request Body:
+
+{
+  "session_id": "session_abc123xyz",
+  "code": "123456",
+  "to": "+84901234567",
+  "app_check_token": "optional-app-check-token"
+}
+
+Ví dụ cURL
+curl --location --request POST "<BaseUrl>/open/identity/v1/sso/verification/check" \
+  --header "Authorization: Bearer REDACTED" \
+  --header "Content-Type: application/json" \
+  --data-raw '{
+    "session_id": "session_abc123xyz",
+    "code": "123456",
+    "to": "+84901234567",
+    "app_check_token": "optional-app-check-token"
+  }'
+
+
+Response thành công
+HTTP Status: 200 OK
+
+Khi mã xác thực đúng và user đã tồn tại tại V-ID (trường user_id có giá trị):
+
+{
+  "code": 200,
+  "message": "Verification successful",
+  "data": {
+    "session_id": "session_abc123xyz",
+    "channel": "sms",
+    "to": "+84901234567",
+    "status": "approved",
+    "valid": true,
+    "created_at": "2024-01-15T10:30:00Z",
+    "user_id": "123456789"
+  }
+}
+
+Khi mã xác thực đúng nhưng user chưa tồn tại tại V-ID (trường user_id là null — cần gọi API đăng ký ở Bước 3):
+
+{
+  "code": 200,
+  "message": "Verification successful",
+  "data": {
+    "session_id": "session_abc123xyz",
+    "channel": "sms",
+    "to": "+84901234567",
+    "status": "approved",
+    "valid": true,
+    "created_at": "2024-01-15T10:30:00Z",
+    "user_id": null
+  }
+}
+
+Khi mã xác thực sai (còn cơ hội thử lại):
+
+{
+  "code": 200,
+  "message": "Invalid code",
+  "data": {
+    "session_id": "session_abc123xyz",
+    "channel": "sms",
+    "to": "+84901234567",
+    "status": "pending",
+    "valid": false,
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+}
+
+Khi đã hết số lần thử:
+
+{
+  "code": 200,
+  "message": "Max attempts reached",
+  "data": {
+    "session_id": "session_abc123xyz",
+    "channel": "sms",
+    "to": "+84901234567",
+    "status": "max_attempts_reached",
+    "valid": false,
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+}
+
+Response lỗi
+HTTP Status: 400 Bad Request (Thiếu tham số hoặc tham số không hợp lệ)
+
+{
+  "code": 400,
+  "message": "Invalid request parameters",
+  "data": null
+}
+
+HTTP Status: 401 Unauthorized (Access token không hợp lệ hoặc đã hết hạn)
+
+{
+  "code": 401,
+  "message": "Unauthorized",
+  "data": null
+}
+
+HTTP Status: 404 Not Found (Session ID không tồn tại hoặc đã hết hạn)
+
+{
+  "code": 404,
+  "message": "Session not found or expired",
+  "data": null
+}
+
+Các trường trong Response Data (Bước 2)
+Trường	Loại	Mô tả
+session_id	string	ID phiên làm việc
+channel	string	Kênh đã sử dụng: sms
+to	string	Số điện thoại (định dạng E.164) đã gửi mã
+status	string	Trạng thái: pending, approved, max_attempts_reached, deleted, failed, hoặc expired
+valid	boolean	true nếu mã xác thực đúng và đã được phê duyệt, false nếu mã sai hoặc chưa được phê duyệt
+created_at	string	Thời gian tạo phiên xác thực (ISO 8601 format)
+user_id	string | null	ID user tại V-ID khi user đã tồn tại; null khi user chưa tồn tại — khi đó cần gọi API đăng ký (Bước 3)
+Xử lý trạng thái OTP
+Sau khi gọi API xác thực mã (/open/identity/v1/sso/verification/check), bạn cần kiểm tra trường status trong response để xác định hành động tiếp theo. Dưới đây là cách xử lý các trạng thái:
+
+1. Trạng thái thành công: approved
+Khi status === 'approved', người dùng đã xác thực thành công. Kiểm tra user_id: nếu có giá trị thì user đã tồn tại; nếu null thì gọi API đăng ký (Bước 3) trước khi tiếp tục.
+
+if (check.status === 'approved') {
+    if (check.data.user_id) {
+        // User đã tồn tại tại V-ID — tiếp tục luồng đăng nhập
+        console.log("User exists, proceed with login");
+    } else {
+        // User chưa tồn tại — gọi API đăng ký (Bước 3) với session_id và name
+        console.log("User does not exist, call register API first");
+        // await register({ session_id: check.data.session_id, name: "..." });
+    }
+}
+
+
+2. Lỗi có thể thử lại: pending
+Khi status === 'pending', mã xác thực không đúng nhưng phiên làm việc vẫn còn hiệu lực. Người dùng có thể thử lại với mã khác.
+
+else if (check.status === 'pending') {
+    // Mã xác thực sai.
+    // valid là false ở đây, nhưng người dùng có thể thử lại.
+    console.log("Wrong code. Please try again.");
+    // Hiển thị thông báo lỗi và cho phép người dùng nhập lại mã
+}
+
+3. Lỗi không thể tiếp tục: Các trạng thái khác
+Khi status là max_attempts_reached, expired, failed, hoặc deleted, phiên làm việc đã kết thúc. Bạn PHẢI bắt đầu lại quy trình xác thực từ đầu.
+
+else {
+    // status là 'max_attempts_reached', 'expired', 'failed', hoặc 'deleted'
+    // Bạn PHẢI bắt đầu một phiên xác thực mới từ đầu.
+    console.log("Session ended. Please request a new code.");
+    // Yêu cầu người dùng yêu cầu mã xác thực mới
+    // Quay lại Bước 1: Gửi mã xác thực
+}
+
+
+Tóm tắt các trạng thái
+Trạng thái	Mô tả	Hành động
+approved	Xác thực thành công	Tiếp tục với luồng đăng nhập
+pending	Mã sai nhưng còn có thể thử lại	Cho phép người dùng nhập lại mã
+max_attempts_reached	Đã hết số lần thử	Yêu cầu người dùng yêu cầu mã mới
+expired	Phiên đã hết hạn	Yêu cầu người dùng yêu cầu mã mới
+failed	Xác thực thất bại	Yêu cầu người dùng yêu cầu mã mới
+deleted	Phiên đã bị xóa	Yêu cầu người dùng yêu cầu mã mới
+Lưu ý quan trọng
+Bảo mật
+Session ID: session_id nhận được từ bước gửi mã xác thực có thời hạn hiệu lực. Cần sử dụng ngay sau khi nhận được
+Mã xác thực: Mã xác thực có thời hạn hiệu lực ngắn (thường là 2-5 phút) và chỉ có thể sử dụng một lần
+Rate Limiting: Hệ thống có giới hạn số lần gửi mã xác thực trong một khoảng thời gian để tránh spam
+Số lần thử: Hệ thống giới hạn số lần nhập sai mã. Khi đạt giới hạn, trạng thái sẽ chuyển sang max_attempts_reached
+Định dạng số điện thoại: Số điện thoại phải được định dạng theo chuẩn E.164 (bắt đầu bằng dấu +, theo sau là mã quốc gia và số điện thoại, ví dụ: +84901234567)
+Luồng xử lý sau khi xác thực thành công
+Sau khi nhận được status: "approved" từ API xác thực (Bước 2), backend của bạn nên:
+
+Kiểm tra user_id trong response: user_id có giá trị nghĩa là user đã tồn tại tại V-ID; user_id === null nghĩa là user chưa tồn tại.
+Nếu user_id === null: Gọi API đăng ký (Bước 3) với session_id và name để tạo user mới tại V-ID; sau đó nhận được user_id mới.
+Kiểm tra/cập nhật user trong database của bạn (dựa trên to hoặc user_id).
+Tạo session token riêng cho ứng dụng của bạn.
+Trả về token cho client để lưu vào secure storage.
+Bước 3: Đăng ký user mới khi chưa tồn tại tại V-ID
+Khi API xác thực mã (Bước 2) trả về status: "approved" và user_id: null, nghĩa là số điện thoại đã được xác thực nhưng chưa có tài khoản tại V-ID. Gọi API này để tạo tài khoản mới, sử dụng session_id nhận được từ response Bước 2.
+
+Endpoint
+POST <BaseUrl>/open/identity/v1/sso/users/register
+
+Request Headers
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+Request Body
+Tham số	Loại	Bắt buộc	Mô tả
+session_id	string	Có	Session ID nhận được từ response Bước 2 (khi verification thành công)
+name	string	Có	Tên hiển thị của user
+Ví dụ Request Body:
+
+{
+  "session_id": "session_abc123xyz",
+  "name": "John Doe"
+}
+
+Ví dụ cURL
+curl --location --request POST "<BaseUrl>/open/identity/v1/sso/verification/register" \
+  --header "Authorization: Bearer REDACTED" \
+  --header "Content-Type: application/json" \
+  --data-raw '{
+    "session_id": "session_abc123xyz",
+    "name": "John Doe"
+  }'
+
+
+Response thành công
+HTTP Status: 200 OK
+
+{
+  "code": 200,
+  "message": "Registration successful",
+  "data": {
+    "user_id": "123456789",
+    "session_id": "session_abc123xyz",
+    "name": "John Doe",
+    "created_at": "2024-01-15T10:35:00Z"
+  }
+}
+
+Response lỗi
+HTTP Status: 400 Bad Request (Thiếu tham số hoặc session không hợp lệ)
+
+{
+  "code": 400,
+  "message": "Invalid request parameters or session not in approved state",
+  "data": null
+}
+
+
+HTTP Status: 404 Not Found (Session không tồn tại hoặc đã hết hạn)
+
+{
+  "code": 404,
+  "message": "Session not found or expired",
+  "data": null
+}
+
+HTTP Status: 409 Conflict (User đã tồn tại — không cần đăng ký lại)
+
+{
+  "code": 409,
+  "message": "User already exists for this phone number",
+  "data": null
+}
+
+Khi nào gọi Bước 3
+Chỉ gọi khi Bước 2 trả về status: "approved" và user_id === null.
+Nếu Bước 2 đã trả về user_id có giá trị, user đã tồn tại tại V-ID, không gọi API đăng ký.
+Previous
+Xác thực V-ID sử dụng seed token
+
+
+
+
+
+Tài liệu luồng xác thực số điện thoại Hermes App qua V-ID
+1. Tổng quan
+
+Luồng này mô tả quy trình xác thực số điện thoại trong Hermes App thông qua Hermes Backend và V-ID.
+
+Các thành phần tham gia:
+
+Thành phần	Vai trò
+Người dùng	Nhập số điện thoại và mã xác thực SMS
+Hermes App	Giao diện nhập số điện thoại, nhập OTP, lưu Hermes token
+Hermes Backend	Điều phối xác thực, gọi V-ID, tạo phiên làm việc riêng
+V-ID	Gửi mã xác thực SMS, kiểm tra OTP, trả user_id hoặc tạo user mới
+
+Mục tiêu:
+
+Xác thực người dùng bằng số điện thoại.
+Dùng V-ID làm hệ thống xác thực trung tâm.
+Hermes Backend tạo session/token riêng cho Hermes sau khi V-ID xác thực thành công.
+Nếu user đã tồn tại trên V-ID thì đọc thông tin user.
+Nếu user chưa tồn tại thì đăng ký user mới trên V-ID.
+2. Luồng tổng thể
+
+Quy trình gồm các nhóm bước chính:
+
+Người dùng nhập số điện thoại.
+Hermes Backend yêu cầu V-ID gửi mã OTP qua SMS.
+Người dùng nhập mã OTP.
+Hermes Backend yêu cầu V-ID kiểm tra OTP.
+V-ID trả kết quả xác thực và user_id nếu có.
+Hermes Backend kiểm tra user đã tồn tại hay chưa.
+Hermes Backend tạo/cập nhật user local và cấp Hermes token.
+3. Luồng chi tiết
+Bước 1: Người dùng nhập số điện thoại
+
+Người dùng nhập số điện thoại trên Hermes App.
+
+Phone Number
+
+Hermes App gửi request đến Hermes Backend:
+
+POST /otp/request
+Content-Type: application/json
+
+{
+  "phone": "0900000000"
+}
+Bước 2: Hermes Backend yêu cầu V-ID gửi mã xác thực
+
+Hermes Backend gọi API V-ID để tạo phiên xác thực OTP.
+
+POST /open/identity/v1/sso/verification
+Content-Type: application/json
+
+{
+  "channel": "sms",
+  "to": "0900000000"
+}
+
+Trong đó:
+
+Trường	Ý nghĩa
+channel	Kênh gửi mã xác thực, ví dụ sms
+to	Số điện thoại nhận mã OTP
+Bước 3: V-ID gửi mã xác thực qua SMS
+
+V-ID gửi mã OTP đến số điện thoại của người dùng.
+
+Sau đó V-ID trả thông tin phiên xác thực về Hermes Backend:
+
+{
+  "session_id": "otp_session_id",
+  "channel": "sms",
+  "to": "0900000000",
+  "status": "sent",
+  "attempts": 0,
+  "created_at": "2026-01-01T10:00:00Z"
+}
+
+Hermes Backend trả kết quả về Hermes App:
+
+{
+  "success": true,
+  "sessionId": "otp_session_id",
+  "status": "sent"
+}
+
+Hermes App chuyển sang màn hình nhập mã xác thực.
+
+Bước 4: Người dùng nhập mã xác thực
+
+Người dùng nhập OTP nhận được từ SMS.
+
+OTP Code
+
+Hermes App gửi mã OTP và session_id lên backend:
+
+POST /otp/verify
+Content-Type: application/json
+
+{
+  "session_id": "otp_session_id",
+  "code": "123456",
+  "to": "0900000000"
+}
+Bước 5: Hermes Backend xác thực mã OTP với V-ID
+
+Hermes Backend gọi API V-ID để kiểm tra OTP:
+
+POST /open/identity/v1/sso/verification/check
+Content-Type: application/json
+
+{
+  "session_id": "otp_session_id",
+  "code": "123456",
+  "to": "0900000000"
+}
+
+V-ID kiểm tra:
+
+session_id có hợp lệ không.
+OTP có đúng không.
+OTP còn hạn không.
+Số lần thử có vượt giới hạn không.
+Số điện thoại to có khớp với phiên OTP không.
+
+Nếu hợp lệ, V-ID trả kết quả:
+
+{
+  "session_id": "otp_session_id",
+  "status": "verified",
+  "user_id": "vid_user_id"
+}
+
+Trường user_id có thể có hoặc không.
+
+4. Xử lý user sau khi xác thực OTP
+
+Sau khi OTP hợp lệ, Hermes Backend xử lý theo 2 nhánh.
+
+Nhánh A: user_id có giá trị — user đã tồn tại trên V-ID
+
+Nếu response từ V-ID có user_id, Hermes Backend gọi API lấy thông tin user:
+
+POST /open/identity/v1/sso/users/query
+Content-Type: application/json
+
+{
+  "user_id": "vid_user_id"
+}
+
+V-ID trả thông tin user:
+
+{
+  "user_id": "vid_user_id",
+  "name": "Nguyen Van A",
+  "phone": "0900000000",
+  "email": "user@example.com",
+  "avatar": "https://..."
+}
+
+Hermes Backend dùng dữ liệu này để tạo hoặc cập nhật user trong Hermes DB.
+
+Nhánh B: user_id là null — user chưa tồn tại trên V-ID
+
+Nếu V-ID trả user_id = null, Hermes Backend đăng ký user mới trên V-ID.
+
+POST /open/identity/v1/sso/users/register
+Content-Type: application/json
+
+{
+  "session_id": "otp_session_id",
+  "name": "Nguyen Van A"
+}
+
+V-ID tạo user mới và trả về:
+
+{
+  "user_id": "new_vid_user_id",
+  "name": "Nguyen Van A",
+  "created_at": "2026-01-01T10:05:00Z"
+}
+
+Sau đó Hermes Backend dùng user_id mới để mapping với user Hermes.
+
+5. Khởi tạo phiên làm việc riêng của Hermes
+Bước 7: Hermes Backend lưu/cập nhật user local
+
+Hermes Backend lưu hoặc cập nhật user trong Hermes DB.
+
+Ví dụ dữ liệu local:
+
+{
+  "id": "hermes_user_id",
+  "vid_user_id": "vid_user_id",
+  "phone": "0900000000",
+  "name": "Nguyen Van A",
+  "email": "user@example.com",
+  "avatar": "https://..."
+}
+
+Nên dùng vid_user_id làm khóa mapping chính giữa Hermes và V-ID.
+
+Bước 8: Hermes Backend tạo Hermes token/session
+
+Sau khi có user Hermes, backend tạo token hoặc session riêng cho Hermes.
+
+Ví dụ nếu dùng JWT:
+
+{
+  "access_token": "hermes_access_token",
+  "refresh_token": "hermes_refresh_token",
+  "expires_in": 3600,
+  "token_type": "Bearer"
+}
+
+Hoặc nếu dùng cookie session:
+
+Set-Cookie: hermes_session=...; HttpOnly; Secure; SameSite=Lax
+Bước 9: Hermes Backend trả token về Hermes App
+
+Hermes Backend trả Hermes token về app:
+
+{
+  "success": true,
+  "accessToken": "hermes_access_token",
+  "refreshToken": "hermes_refresh_token",
+  "user": {
+    "id": "hermes_user_id",
+    "vidUserId": "vid_user_id",
+    "phone": "0900000000",
+    "name": "Nguyen Van A",
+    "email": "user@example.com",
+    "avatar": "https://..."
+  }
+}
+
+Hermes App lưu token vào secure storage.
+
+Bước 10: Hermes App đăng nhập thành công
+
+Hermes App lưu token và chuyển người dùng vào màn hình chính.
+
+await SecureStorage.setItem("accessToken", response.accessToken);
+await SecureStorage.setItem("refreshToken", response.refreshToken);
+
+navigateToHome();
+6. API đề xuất cho Hermes Backend
+6.1. Request OTP
+POST /otp/request
+Content-Type: application/json
+Request
+{
+  "phone": "0900000000"
+}
+Response thành công
+{
+  "success": true,
+  "sessionId": "otp_session_id",
+  "channel": "sms",
+  "to": "0900000000",
+  "status": "sent"
+}
+Response lỗi
+{
+  "success": false,
+  "error": "otp_request_failed"
+}
+6.2. Verify OTP
+POST /otp/verify
+Content-Type: application/json
+Request
+{
+  "session_id": "otp_session_id",
+  "code": "123456",
+  "to": "0900000000"
+}
+Response thành công
+{
+  "success": true,
+  "accessToken": "hermes_access_token",
+  "refreshToken": "hermes_refresh_token",
+  "user": {
+    "id": "hermes_user_id",
+    "vidUserId": "vid_user_id",
+    "phone": "0900000000",
+    "name": "Nguyen Van A",
+    "email": "user@example.com",
+    "avatar": "https://..."
+  }
+}
+Response lỗi
+{
+  "success": false,
+  "error": "invalid_otp"
+}
+7. API Hermes Backend gọi V-ID
+7.1. Gửi mã xác thực
+POST /open/identity/v1/sso/verification
+Content-Type: application/json
+Request
+{
+  "channel": "sms",
+  "to": "0900000000"
+}
+Response
+{
+  "session_id": "otp_session_id",
+  "channel": "sms",
+  "to": "0900000000",
+  "status": "sent",
+  "attempts": 0,
+  "created_at": "2026-01-01T10:00:00Z"
+}
+7.2. Kiểm tra mã xác thực
+POST /open/identity/v1/sso/verification/check
+Content-Type: application/json
+Request
+{
+  "session_id": "otp_session_id",
+  "code": "123456",
+  "to": "0900000000"
+}
+Response
+{
+  "session_id": "otp_session_id",
+  "status": "verified",
+  "user_id": "vid_user_id"
+}
+7.3. Lấy thông tin user V-ID
+POST /open/identity/v1/sso/users/query
+Content-Type: application/json
+Request
+{
+  "user_id": "vid_user_id"
+}
+Response
+{
+  "user_id": "vid_user_id",
+  "name": "Nguyen Van A",
+  "phone": "0900000000",
+  "email": "user@example.com",
+  "avatar": "https://..."
+}
+7.4. Đăng ký user mới trên V-ID
+POST /open/identity/v1/sso/users/register
+Content-Type: application/json
+Request
+{
+  "session_id": "otp_session_id",
+  "name": "Nguyen Van A"
+}
+Response
+{
+  "user_id": "new_vid_user_id",
+  "name": "Nguyen Van A",
+  "created_at": "2026-01-01T10:05:00Z"
+}
+8. Sequence dạng text
+1. Người dùng -> Hermes App:
+   Nhập số điện thoại.
+
+2. Hermes App -> Hermes Backend:
+   POST /otp/request { phone }
+
+3. Hermes Backend -> V-ID:
+   POST /open/identity/v1/sso/verification
+   { channel: "sms", to }
+
+4. V-ID -> Người dùng:
+   Gửi mã xác thực qua SMS.
+
+5. V-ID -> Hermes Backend:
+   Trả session_id, channel, to, status, attempts, created_at.
+
+6. Hermes Backend -> Hermes App:
+   Xác nhận đã gửi mã xác thực thành công.
+
+7. Người dùng -> Hermes App:
+   Nhập mã xác thực từ SMS.
+
+8. Hermes App -> Hermes Backend:
+   POST /otp/verify { session_id, code, to }
+
+9. Hermes Backend -> V-ID:
+   POST /open/identity/v1/sso/verification/check
+   { session_id, code, to }
+
+10. V-ID:
+   Kiểm tra OTP và hạn dùng.
+
+11. V-ID -> Hermes Backend:
+   Trả session_id, status, user_id.
+
+12A. Nếu user_id có giá trị:
+   Hermes Backend -> V-ID:
+   POST /open/identity/v1/sso/users/query { user_id }
+
+13A. V-ID -> Hermes Backend:
+   Trả thông tin user.
+
+12B. Nếu user_id là null:
+   Hermes Backend -> V-ID:
+   POST /open/identity/v1/sso/users/register { session_id, name }
+
+13B. V-ID -> Hermes Backend:
+   Trả user_id mới.
+
+14. Hermes Backend:
+   Lưu/cập nhật user trong Hermes DB.
+
+15. Hermes Backend:
+   Tạo Hermes token hoặc session.
+
+16. Hermes Backend -> Hermes App:
+   Trả Hermes token.
+
+17. Hermes App:
+   Lưu token vào Secure Storage.
+
+18. Hermes App:
+   Đăng nhập thành công.
+9. Xử lý lỗi
+Lỗi	Nguyên nhân	Cách xử lý
+invalid_phone	Số điện thoại sai định dạng	Yêu cầu nhập lại
+otp_request_failed	Không gửi được OTP	Cho phép gửi lại sau một khoảng thời gian
+otp_rate_limited	Gửi OTP quá nhiều lần	Khóa tạm thời hoặc yêu cầu chờ
+invalid_session	session_id không tồn tại hoặc không hợp lệ	Yêu cầu gửi OTP lại
+expired_otp	OTP hết hạn	Yêu cầu gửi OTP mới
+invalid_otp	OTP sai	Cho phép nhập lại nếu chưa vượt giới hạn
+max_attempts_exceeded	Vượt số lần nhập sai	Hủy session OTP và yêu cầu gửi lại
+user_query_failed	Không lấy được thông tin user	Retry hoặc trả lỗi đăng nhập
+user_register_failed	Không tạo được user mới trên V-ID	Trả lỗi và log để kiểm tra
+session_create_failed	Không tạo được Hermes token/session	Trả lỗi hệ thống
+10. Bảo mật cần lưu ý
+OTP
+OTP phải có thời gian sống ngắn, ví dụ 3–5 phút.
+Giới hạn số lần nhập sai.
+Giới hạn số lần gửi lại OTP theo số điện thoại và thiết bị.
+Không log OTP.
+Không trả OTP về Hermes App trong response API.
+Hủy hoặc đánh dấu session OTP đã dùng sau khi xác thực thành công.
+Session
+Hermes token nên có thời gian sống phù hợp.
+Refresh token nên được lưu an toàn.
+Trên mobile app, token nên lưu trong Secure Storage, Keychain hoặc Keystore.
+Tránh lưu token trong storage không an toàn.
+Backend
+Validate định dạng số điện thoại.
+Chuẩn hóa số điện thoại về cùng format, ví dụ E.164.
+Không tin tưởng dữ liệu từ client.
+Chỉ tin kết quả xác thực từ V-ID.
+Dùng vid_user_id để mapping user, không chỉ dựa vào phone/email.
+Rate limit các API /otp/request và /otp/verify.
+Log lỗi theo session_id, không log OTP hoặc token.
+11. Pseudo code Hermes Backend
+Request OTP
+async function requestOtp(req, res) {
+  const { phone } = req.body;
+
+  if (!isValidPhone(phone)) {
+    return res.status(400).json({
+      success: false,
+      error: "invalid_phone"
+    });
+  }
+
+  const normalizedPhone = normalizePhone(phone);
+
+  const result = await vidClient.requestVerification({
+    channel: "sms",
+    to: normalizedPhone
+  });
+
+  return res.json({
+    success: true,
+    sessionId: result.session_id,
+    channel: result.channel,
+    to: result.to,
+    status: result.status
+  });
+}
+Verify OTP
+async function verifyOtp(req, res) {
+  const { session_id, code, to } = req.body;
+
+  if (!session_id || !code || !to) {
+    return res.status(400).json({
+      success: false,
+      error: "missing_required_fields"
+    });
+  }
+
+  const normalizedPhone = normalizePhone(to);
+
+  const verification = await vidClient.checkVerification({
+    session_id,
+    code,
+    to: normalizedPhone
+  });
+
+  if (verification.status !== "verified") {
+    return res.status(401).json({
+      success: false,
+      error: "invalid_otp"
+    });
+  }
+
+  let vidUser;
+
+  if (verification.user_id) {
+    vidUser = await vidClient.queryUser({
+      user_id: verification.user_id
+    });
+  } else {
+    vidUser = await vidClient.registerUser({
+      session_id,
+      name: ""
+    });
+  }
+
+  const hermesUser = await userService.upsertFromVidUser({
+    vidUserId: vidUser.user_id,
+    phone: normalizedPhone,
+    name: vidUser.name,
+    email: vidUser.email,
+    avatar: vidUser.avatar
+  });
+
+  const token = await tokenService.createToken({
+    userId: hermesUser.id,
+    vidUserId: vidUser.user_id
+  });
+
+  return res.json({
+    success: true,
+    accessToken: token.accessToken,
+    refreshToken: token.refreshToken,
+    user: {
+      id: hermesUser.id,
+      vidUserId: vidUser.user_id,
+      phone: hermesUser.phone,
+      name: hermesUser.name,
+      email: hermesUser.email,
+      avatar: hermesUser.avatar
+    }
+  });
+}
+12. Pseudo code Hermes App
+async function requestOtp(phone: string) {
+  const response = await api.post("/otp/request", {
+    phone
+  });
+
+  saveOtpSession({
+    sessionId: response.sessionId,
+    phone
+  });
+
+  navigateToOtpScreen();
+}
+async function verifyOtp(code: string) {
+  const { sessionId, phone } = getOtpSession();
+
+  const response = await api.post("/otp/verify", {
+    session_id: sessionId,
+    code,
+    to: phone
+  });
+
+  await SecureStorage.setItem("accessToken", response.accessToken);
+  await SecureStorage.setItem("refreshToken", response.refreshToken);
+
+  setCurrentUser(response.user);
+
+  navigateToHome();
+}
+13. Khuyến nghị triển khai
+
+Nên thiết kế theo hướng:
+
+Hermes App chỉ nhập phone/OTP
+→ Hermes Backend điều phối xác thực
+→ V-ID gửi và kiểm tra OTP
+→ Hermes Backend mapping user
+→ Hermes Backend tạo Hermes token/session
+→ Hermes App lưu token an toàn
+
+Hermes Backend nên là nơi duy nhất:
+
+Gọi API V-ID.
+Quyết định user đã tồn tại hay cần đăng ký.
+Mapping vid_user_id với user Hermes.
+Cấp Hermes token/session.
+Quản lý refresh token và logout.

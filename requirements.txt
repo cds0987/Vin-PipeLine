@@ -11,6 +11,7 @@ pytesseract==0.3.10
 
 # AI / Embedding
 openai==1.30.0
+tiktoken>=0.7.0
 httpx<0.28
 
 # Vector DB

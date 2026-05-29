@@ -1,0 +1,25 @@
+Giới thiệu về SSO
+Single Sign-On (SSO - Đăng nhập một lần) là giải pháp xác thực cho phép người dùng sử dụng một bộ thông tin đăng nhập duy nhất (username/password hoặc phương thức khác) để truy cập nhiều ứng dụng và hệ thống khác nhau mà không cần đăng nhập lại.
+
+SSO giúp tối ưu trải nghiệm người dùng, tăng cường bảo mật, giảm rủi ro quên mật khẩu và hỗ trợ quản lý tập trung cho doanh nghiệp.
+
+Trải nghiệm người dùng
+Đăng nhập một lần cho tất cả các dịch vụ — ví dụ: dùng tài khoản Google hoặc Azure AD để đăng nhập vào các trang web và ứng dụng khác mà không cần tạo tài khoản mới.
+
+Bảo mật
+Giảm thiểu rủi ro bảo mật do không phải quản lý nhiều mật khẩu khác nhau
+Hỗ trợ quản lý quyền truy cập tập trung tại một điểm duy nhất
+Năng suất
+Tiết kiệm thời gian đăng nhập lặp lại, giúp tăng hiệu quả công việc cho cả người dùng cá nhân và tổ chức.
+
+Quản trị
+Dễ dàng kiểm soát và thu hồi quyền truy cập khi nhân viên nghỉ việc hoặc thay đổi vị trí công tác — chỉ cần vô hiệu hóa một tài khoản thay vì nhiều tài khoản riêng lẻ.
+
+Nguyên lý hoạt động
+Khi người dùng đăng nhập vào ứng dụng đầu tiên, hệ thống SSO tạo ra một token hoặc cookie xác thực. Khi truy cập các ứng dụng khác trong cùng hệ thống SSO, token này được tự động sử dụng để xác minh danh tính mà không yêu cầu nhập lại thông tin đăng nhập.
+
+Các giao thức SSO phổ biến bao gồm:
+
+SAML (Security Assertion Markup Language) — thường dùng trong môi trường doanh nghiệp
+OpenID Connect — giao thức hiện đại, xây dựng trên OAuth 2.0
+Hiện V-ID đang hỗ trợ OpenID Connect.

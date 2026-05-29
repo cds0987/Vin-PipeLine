@@ -1,0 +1,124 @@
+Xác thực V-ID sử dụng seed token
+Ở luồng này cho phép Hermes App có thể login sử dụng tài khoản đang đăng nhập vào V-App. (tương tự tính năng login bằng tài khoản Facebook trên Instagram).
+
+V-App lưu trữ V-ID seed token trong shared storage / keychain. Việc chia sẻ này được thực hiện thông qua SDK App Mesh.
+
+Hermes App truy cập vào SDK để đọc shared token và sử dụng để exchange token riêng cho ứng dụng Hermes App.
+
+V-ID
+Hermes Backend
+📱 Hermes App
+App Mesh SDK
+📱 V-App
+V-ID
+Hermes Backend
+📱 Hermes App
+App Mesh SDK
+📱 V-App
+Bước chuẩn bị (Sau khi login)
+Luồng đăng nhập chéo (Cross-App Login)
+Thực hiện trao đổi qua Backend
+Gửi Seed Token + Hermes Access Token
+Kiểm tra User cục bộ
+Lưu Seed Token &
+Userinfo (name, avatar)
+1
+Đọc Seed Token
+2
+Trả về Seed Token
+3
+Request Token Exchange
+{token: Seed Token}
+4
+POST /open/identity/v1/sso/seed/userinfo
+5
+Verify Hermes AT & Seed Token
+6
+Trả về thông tin (UserID, Name, Phone, Email, Avatar...)
+7
+Check user_id in Hermes DB
+8
+Khởi tạo Hermes Token (Local Session)
+9
+Trả về Hermes Token
+10
+Đăng nhập thành công
+11
+API: Lấy thông tin người dùng bằng Seed Token
+API này cho phép bạn lấy thông tin người dùng từ seed token. Trước khi gọi API này, bạn cần có access token được lấy từ quy trình Authorization.
+
+Endpoint
+POST <BaseUrl>/open/identity/v1/sso/seed/userinfo
+
+Request Headers
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+info
+Access token cần được lấy trước thông qua quy trình được mô tả trong Authorization.
+
+Request Body
+Tham số	Loại	Bắt buộc	Mô tả
+client_id	string	Có	Client ID của ứng dụng
+seed_token	string	Có	Seed token được lấy từ shared storage/keychain của V-App
+app_check_token	string	Không	Token để kiểm tra ứng dụng (tùy chọn)
+Ví dụ Request Body:
+
+{
+  "client_id": "your-client-id",
+  "seed_token": "seed_token_from_v_app",
+  "app_check_token": "optional-app-check-token"
+}
+
+Ví dụ cURL
+curl --location --request POST "<BaseUrl>/open/identity/v1/sso/seed/userinfo" \
+  --header "Authorization: Bearer REDACTED" \
+  --header "Content-Type: application/json" \
+  --data-raw '{
+    "client_id": "your-client-id",
+    "seed_token": "seed_token_from_v_app",
+    "app_check_token": "optional-app-check-token"
+  }'
+
+
+Response thành công
+HTTP Status: 200 OK
+
+{
+  "code": 200,
+  "message": "Success",
+  "data": {
+    "user_id": "V-12345",
+    "name": "Nguyễn Văn A",
+    "avatar_url": "https://example.com/avatar.jpg",
+    "phone_number": "+84901234567"
+  }
+}
+
+Response lỗi
+HTTP Status: 400 Bad Request hoặc 401 Unauthorized
+
+{
+  "code": 400,
+  "message": "Invalid seed token",
+  "data": null
+}
+
+HTTP Status: 401 Unauthorized (Access token không hợp lệ hoặc đã hết hạn)
+
+{
+  "code": 401,
+  "message": "Unauthorized",
+  "data": null
+}
+
+Các trường trong Response Data
+Trường	Loại	Mô tả
+user_id	string	ID duy nhất của người dùng trong hệ thống
+name	string	Tên hiển thị của người dùng
+avatar_url	string	URL ảnh đại diện của người dùng
+phone_number	string	Số điện thoại của người dùng
+Lưu ý
+Seed token thường được lưu trữ trong shared storage/keychain của V-App và có thể được đọc bởi các ứng dụng khác trong cùng hệ sinh thái
+Access token cần được lấy trước thông qua OAuth 2.0 Client Credentials flow như mô tả trong Authorization
+Seed token có thể có thời hạn hiệu lực, cần xử lý trường hợp token hết hạn

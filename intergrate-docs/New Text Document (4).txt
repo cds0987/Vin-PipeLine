@@ -1,0 +1,229 @@
+iOS
+Yêu cầu hệ thống
+iOS 12.0+
+Swift 5.0+
+Xcode 14+
+Cài đặt
+CocoaPods
+Thêm vào file Podfile của bạn:
+
+source 'https://jfrog.vinsmartfuture.tech/artifactory/api/pods/vsf-ptnt-cocoapods-local'
+
+target 'YourApp' do
+  pod 'VsfVidSdk', '~> 0.1.4'
+end
+
+
+Sau đó chạy lệnh:
+
+pod install
+
+Swift Package Manager
+Thêm package dependency trong Xcode hoặc file Package.swift của bạn:
+
+dependencies: [
+    .package(url: "https://jfrog.vinsmartfuture.tech/.../VsfVidSdk.git", from: "0.1.4")
+]
+
+
+Thiết lập
+1. Đăng ký Scheme Chuyển hướng (Redirect URI Scheme)
+Trong project Xcode của bạn, đi đến Target → Info → URL Types và thêm:
+
+Trường (Field)	Giá trị (Value)
+Identifier	vn.vsf.vid.sdk
+URL Schemes	yourapp (phần scheme trong redirect URI của bạn)
+Role	Viewer
+Ví dụ: nếu redirect URI của bạn là yourapp://callback, thì scheme sẽ là yourapp.
+
+2. Khởi tạo SDK
+Khởi tạo càng sớm càng tốt, thông thường trong AppDelegate hoặc điểm vào (entry point) của ứng dụng:
+
+import VsfVidSdk
+
+@UIApplicationMain
+class AppDelegate: UIResponder, UIApplicationDelegate {
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+    ) -> Bool {
+
+        VsfVidSdk.shared.initialize(config: VsfVidConfig(
+            clientId: "your_client_id",
+            redirectUri: "yourapp-dev://callback",
+            environment: .dev,
+            scopes: ["openid", "profile", "email", "phone", "offline"],
+            // authorizationUrl: "https://your-backend.com/auth" // Tùy chọn: xem phần `authorizationUrl` bên dưới
+        ))
+
+        return true
+    }
+}
+
+
+Lưu ý về authorizationUrl: Tham số này là tùy chọn và được dùng khi backend của bạn tự tạo URL ủy quyền (xem Phương án 2 bên dưới).
+
+Môi trường (Environments):
+
+Môi trường	Server Ủy quyền (Authorization Server)	Server Token (Token Server)
+.dev	auth.dev.vsf.services	api.dev.vsf.services
+.sit	auth.sit.vsf.services	api.sit.vsf.services
+.uat	auth.uat.vsf.services	api.uat.vsf.services
+.production (mặc định)	auth.v-app.vn	api.v-app.vn
+Lưu ý: redirectUri nên khác nhau cho từng môi trường (ví dụ: yourapp-dev://callback, yourapp://callback cho production). Đăng ký mỗi scheme trong URL Types của bạn và trên V-ID.
+
+Cách sử dụng
+Đăng nhập (SSO)
+V-ID SDK hỗ trợ 2 phương thức đăng nhập — chọn 1 trong 2 tùy theo cách backend của bạn xử lý URL ủy quyền. Xem Sơ đồ luồng Authorization Code + PKCE để hiểu rõ quy trình.
+
+Phương án 1 — Trao đổi Token tại Client: SDK tự tạo URL ủy quyền (kèm PKCE) và trực tiếp đổi mã code lấy token. Phù hợp khi app tự quản lý token.
+Phương án 2 — authorizationUrl do Backend tạo: Backend tự tạo toàn bộ URL ủy quyền; SDK chỉ mở URL và lắng nghe callback. Phù hợp khi backend cần gắn state/nonce tùy chỉnh hoặc tự đổi token.
+Phương án 1 — Trao đổi Token tại Client
+// Bước 1: Ủy quyền — mở trình duyệt, trả về authorization response
+VsfVidSdk.shared.authorize(
+    presentingViewController: self
+) { result in
+    switch result {
+    case .success(let authResponse):
+        // Bước 2: Đổi mã (code) lấy token
+        VsfVidSdk.shared.exchangeToken(authResponse: authResponse) { tokenResult in
+            switch tokenResult {
+            case .success(let tokens):
+                print("Access Token: \(tokens.accessToken)")
+                print("Refresh Token: \(tokens.refreshToken ?? "none")")
+                print("ID Token: \(tokens.idToken ?? "none")")
+                print("Expires In: \(tokens.expiresIn)s")
+                print("Scope: \(tokens.scope ?? "none")")
+
+                // Lưu trữ token an toàn (ví dụ: Keychain)
+
+            case .failure(let error):
+                print("Đổi token thất bại: \(error)")
+            }
+        }
+
+    case .failure(let error):
+        print("Ủy quyền thất bại: \(error)")
+    }
+}
+
+
+SDK sẽ:
+
+Tạo một mã kiểm tra PKCE (code verifier) và mã thách thức (challenge)
+Mở trình duyệt hệ thống (ASWebAuthenticationSession) đến trang đăng nhập V-ID
+Người dùng xác thực (hoặc bỏ qua nếu đã có phiên SSO)
+Bắt callback và trả về AuthorizationResponse
+Khi gọi exchangeToken(), thực hiện POST đến endpoint token và trả về TokenResponse
+Phương án 2 — authorizationUrl do Backend tạo
+Nếu backend của bạn tạo URL ủy quyền (ví dụ: để gắn thêm các biến state hoặc nonce tùy chỉnh), hãy truyền URL này qua VsfVidConfig trong lúc khởi tạo:
+
+// 1. Khởi tạo với URL xây dựng sẵn
+VsfVidSdk.shared.initialize(config: VsfVidConfig(
+    clientId: "your_client_id",
+    redirectUri: "yourapp-dev://callback",
+    authorizationUrl: "https://your-backend.com/auth?..." // URL tùy chỉnh của bạn
+))
+
+// 2. Bắt đầu ủy quyền
+VsfVidSdk.shared.authorize(
+    presentingViewController: self
+) { result in
+    switch result {
+    case .success(let authResponse):
+        // Xử lý response
+        print("Thành công, code: \(authResponse.code ?? "")")
+    case .failure(let error):
+        print("Ủy quyền thất bại: \(error)")
+    }
+}
+
+
+SDK sẽ mở chính xác URL này mà không gắn thêm tham số PKCE, nhưng vẫn tiếp tục lắng nghe callback chuyển hướng của bạn.
+
+Làm mới Token (Refresh Token)
+Khi access token hết hạn, sử dụng refresh token để lấy token mới:
+
+VsfVidSdk.shared.refreshToken(
+    refreshToken: storedRefreshToken
+) { result in
+    switch result {
+    case .success(let tokens):
+        // Cập nhật token đã lưu
+        print("Access Token mới: \(tokens.accessToken)")
+        print("Refresh Token mới: \(tokens.refreshToken ?? "giữ nguyên")")
+
+    case .failure(let error):
+        if case .tokenExchangeFailed = error {
+            // Refresh token đã hết hạn — chuyển hướng đăng nhập lại
+            print("Refresh token đã hết hạn, cần xác thực lại")
+        }
+    }
+}
+
+Tắt SDK (Shutdown)
+Dọn dẹp khi SDK không còn được sử dụng:
+
+VsfVidSdk.shared.shutdown()
+
+Xử lý Lỗi
+Tất cả các lỗi được trả về dưới dạng VidError:
+
+VsfVidSdk.shared.authorize(presentingViewController: self) { result in
+    switch result {
+    case .success(let tokens):
+        // Xử lý token
+        
+    case .failure(let error):
+        switch error {
+        case .notInitialized:
+            // SDK chưa được khởi tạo — gọi initialize() trước
+        case .invalidConfig:
+            // Cấu hình không hợp lệ
+        case .authCancelled:
+            // Người dùng đã nhấn "Cancel" trong trình duyệt
+        case .authFailed(let message):
+            // Authorization server trả về lỗi
+        case .invalidState:
+            // State không khớp — có thể là tấn công CSRF
+        case .tokenExchangeFailed(let message):
+            // Quá trình đổi mã (code) lấy token thất bại
+        case .networkError(let underlying):
+            // Vấn đề kết nối mạng
+        case .invalidResponse:
+            // Định dạng response từ server không như mong đợi
+        }
+    }
+}
+
+Khắc phục sự cố
+Lỗi "No URL scheme registered"
+Đảm bảo bạn đã thêm URL scheme trong Target → Info → URL Types. Scheme phải khớp với phần scheme trong redirectUri của bạn (ví dụ: yourapp trong yourapp://callback).
+
+Trình duyệt ủy quyền không đóng lại sau khi đăng nhập
+Kiểm tra xem redirectUri có khớp chính xác với URI đã đăng ký trên V-ID hay không (bao gồm đường dẫn, phân biệt hoa thường và dấu gạch chéo ở cuối).
+
+Làm mới Token báo lỗi invalid_grant
+Refresh token đã hết hạn hoặc bị thu hồi. Hãy chuyển hướng người dùng đến trang đăng nhập lại thông qua authorize().
+
+Previous
+SDK
+Next
+Android
+Yêu cầu hệ thống
+Cài đặt
+CocoaPods
+Swift Package Manager
+Thiết lập
+1. Đăng ký Scheme Chuyển hướng (Redirect URI Scheme)
+2. Khởi tạo SDK
+Cách sử dụng
+Đăng nhập (SSO)
+Làm mới Token (Refresh Token)
+Tắt SDK (Shutdown)
+Xử lý Lỗi
+Khắc phục sự cố
+Lỗi "No URL scheme registered"
+Trình duyệt ủy quyền không đóng lại sau khi đăng nhập
+Làm mới Token báo lỗi invalid_grant

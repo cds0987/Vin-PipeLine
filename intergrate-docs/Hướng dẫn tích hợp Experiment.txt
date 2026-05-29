@@ -1,0 +1,141 @@
+Hướng dẫn tích hợp Experiment
+Để sử dụng A/B testing và feature flags từ nền tảng V-Experiment, bạn cần tích hợp GrowthBook SDK vào ứng dụng (frontend, backend hoặc app) và cấu hình Dev Key từ giao diện quản lý.
+
+Cài đặt GrowthBook SDK
+Tài liệu SDK
+Tài liệu chính thức cho mọi ngôn ngữ/nền tảng:
+
+GrowthBook SDK Documentation
+Chọn ngôn ngữ hoặc nền tảng phù hợp với phần bạn cần tích hợp:
+
+Frontend: Script Tag, JavaScript, React, Webflow, …
+Server: Node.js, PHP, Ruby, Python, Java, …
+Mobile/App: Swift (iOS), Kotlin (Android), …
+Làm theo hướng dẫn cài đặt và cấu hình trong tài liệu, sau đó dùng Dev Key (xem mục bên dưới) để kết nối với project trên V-Experiment.
+
+Cấp Dev Key
+Dev Key được cấp thủ công từ giao diện Experiment Management System. Sau khi có quyền truy cập theo môi trường, thực hiện như sau:
+
+Đăng nhập vào HOST tương ứng (DEV/SIT/UAT/PRODUCTION).
+
+Tạo SDK Connection mới (New SDK Connection).
+
+Trong form:
+
+Name: Đặt tên cho kết nối (ví dụ: "Web App Production", "MiniApp Android").
+SDK Language: Chọn ngôn ngữ/nền tảng (Popular: Script Tag, JavaScript, React, Node.js, PHP, Ruby, Python, Java, Swift, Kotlin; hoặc xem All / Browser / Server / Mobile / Edge).
+Environment: Chọn môi trường (production, development, …).
+Filter by Projects: Chọn project áp dụng cho kết nối này (tùy chọn).
+Feature Options: Có thể bật "Include Feature Rule IDs in Payload" nếu cần.
+Bấm Save — hệ thống sẽ sinh Dev Key cho kết nối vừa tạo.
+
+Sử dụng Dev Key này trong code khi khởi tạo GrowthBook SDK (theo tài liệu GrowthBook) để ứng dụng kết nối đúng project và môi trường trên V-Experiment.
+
+Form New SDK Connection — chọn SDK Language, Environment, Filter by Projects
+
+Tích hợp Experiment System
+Ví dụ khởi tạo GrowthBook trong ứng dụng React:
+
+import { GrowthBook } from "@growthbook/growthbook";
+import { autoAttributesPlugin } from "@growthbook/growthbook/plugins";
+
+const growthbook = new GrowthBook({
+  apiHost: "https://api.sit.vsf.services/experiment-tracking",
+  clientKey: "<client-key>",
+  enableDevMode: true,
+  trackingCallback: (experiment, result) => {
+    // Gửi event lên analytics (xem mục Tích hợp Experiment Exposure)
+    console.log("experiment_exposure", {
+      experimentId: experiment.key,
+      variationId: result.key,
+    });
+  },
+  plugins: [autoAttributesPlugin()],
+});
+
+Thay <client-key> bằng Dev Key đã được cấp. Với môi trường khác (DEV/UAT/PRODUCTION), đổi apiHost cho phù hợp (ví dụ: https://api.dev.vsf.services/experiment-tracking).
+
+Tích hợp Attributes
+Attributes là các thuộc tính gắn với user, giúp bạn linh hoạt khi target đúng tập khách hàng trong experiment.
+
+Ví dụ:
+
+Target theo nền tảng: ios / android (ví dụ attribute platform).
+Target theo nhóm khách hàng: dùng vId (user ID) để chỉ định đúng user cần tham gia experiment.
+Thiết lập attributes khi gọi GrowthBook (ví dụ growthbook.setAttributes({ platform: 'ios', vId: '542782753' })) để hệ thống phân bucket và hiển thị đúng variant cho từng user.
+
+Tích hợp Experiment Exposure
+Tích hợp Experiment Exposure là bắt buộc để đo performance và biết thiết bị/khách hàng đang thuộc experiment & variant nào. Từ dữ liệu exposure, hệ thống tính toán kết quả A/B testing.
+
+Trong trackingCallback của GrowthBook, không chỉ console.log — cần gửi event lên hệ thống tracking (Snowplow) như đã cấu hình ở V-Tracking.
+
+Thay:
+
+console.log("experiment_exposure", {
+  experimentId: experiment.key,
+  variationId: result.key,
+});
+
+Bằng: gửi event tracking Snowplow (self-describing) với payload có cấu trúc sau:
+
+{
+  "event_name": "experiment_exposure",
+  "platform": "ios",
+  "properties": {
+    "experiment_id": "show_account_new_concept",
+    "hash_attribute": "vId",
+    "hash_used": true,
+    "hash_value": "542782753",
+    "in_experiment": true,
+    "variation_id": "0",
+    "variation_index": 0
+  },
+  "vDeviceId": "E0C32107-E215-4110-A6E8-1E9986A40658",
+  "vId": "542782753"
+}
+
+Đảm bảo mọi lần user được xem một variant (exposure) đều gửi event experiment_exposure lên Snowplow với event_name, experiment_id, variation_id / variation_index, và nếu user đã login thì có vId (theo Tracking Rules).
+
+Tạo Feature Flags
+Feature flags được tạo trên giao diện Experiment Management System (GrowthBook). Sau khi đăng nhập vào HOST theo môi trường:
+
+Vào Features trên menu trái.
+Bấm Add Feature để mở form Create Feature.
+Điền thông tin:
+Feature Key: Tên định danh (chỉ dùng chữ, số và _, -, ., ,, :, |; không có khoảng trắng). Không thể đổi sau khi tạo.
+Tags / Description: (tùy chọn) Thêm tag hoặc mô tả.
+Project: Chọn project (ví dụ: My First Project).
+Value Type: Chọn kiểu giá trị (boolean, string, number, …).
+Enabled Environments: Chọn môi trường áp dụng (production, dev, …), có thể chọn "Select All".
+Bấm Create để tạo feature.
+Sau khi tạo, dùng Feature Key trong code với GrowthBook SDK (ví dụ growthbook.isOn('my-feature') hoặc growthbook.getFeatureValue('my-feature', defaultValue)) để bật/tắt hoặc lấy giá trị feature theo user và rules đã cấu hình trên giao diện.
+
+Feature Flag
+
+Tạo Experiment
+Experiment (thí nghiệm A/B) được tạo trên giao diện Experiment Management System (GrowthBook). Sau khi đăng nhập vào HOST theo môi trường:
+
+Vào Experiments trên menu trái.
+Bấm Add để mở wizard Add new Experiment.
+Lần lượt điền theo các bước:
+Bước 1 — Overview: Tên experiment, Tracking Key (định danh duy nhất dùng để track impressions và phân tích kết quả), Project, Hypothesis (ví dụ: giả thuyết thay đổi sẽ cải thiện metric), Description, Tags.
+Bước 2 — Traffic: Cấu hình phân chia traffic giữa các variant.
+Bước 3 — Targeting: Chọn đối tượng (attributes, segments) áp dụng experiment.
+Bước 4 — Metrics: Chọn metric đo lường thành công (goal).
+Hoàn tất wizard và kích hoạt experiment khi sẵn sàng.
+Tracking Key của experiment phải trùng với key dùng trong code (ví dụ growthbook.run({ key: 'my-experiment-key', ... })) và với experiment_id gửi trong event experiment_exposure để dữ liệu A/B được ghép đúng.
+
+Experiment
+
+Previous
+Tổng quan
+Next
+V-Tracking
+Cài đặt GrowthBook SDK
+Tài liệu SDK
+Cấp Dev Key
+Tích hợp Experiment System
+Tích hợp Attributes
+Tích hợp Experiment Exposure
+Tạo Feature Flags
+Tạo E

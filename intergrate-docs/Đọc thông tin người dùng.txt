@@ -1,0 +1,110 @@
+Đọc thông tin người dùng
+API này cho phép bạn đọc thông tin người dùng dựa trên user_id hoặc phone_number. Trước khi gọi API này, bạn cần có access token được lấy từ quy trình Authorization.
+
+Endpoint
+POST <BaseUrl>/open/identity/v1/sso/users/query
+
+Request Headers
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+info
+Access token cần được lấy trước thông qua quy trình được mô tả trong Authorization.
+
+Request Body
+Tham số	Loại	Bắt buộc	Mô tả
+client_id	string	Có	Client ID của ứng dụng
+user_id	string	Có*	ID của người dùng cần đọc
+phone_number	string	Có*	Số điện thoại của người dùng cần đọc (định dạng E.164, ví dụ +84901234567)
+* Phải cung cấp ít nhất một trong hai trường user_id hoặc phone_number. Nếu cả hai cùng được cung cấp, user_id sẽ được ưu tiên.
+
+Ví dụ Request Body (truy vấn theo user_id):
+
+{
+  "client_id": "your-client-id",
+  "user_id": "V-12345"
+}
+
+Ví dụ Request Body (truy vấn theo phone_number):
+
+{
+  "client_id": "your-client-id",
+  "phone_number": "+84901234567"
+}
+
+Ví dụ cURL
+Truy vấn theo user_id:
+
+curl --location --request POST "<BaseUrl>/open/identity/v1/sso/users/query" \
+  --header "Authorization: Bearer REDACTED" \
+  --header "Content-Type: application/json" \
+  --data-raw '{
+    "client_id": "your-client-id",
+    "user_id": "V-12345"
+  }'
+
+Truy vấn theo phone_number:
+
+curl --location --request POST "<BaseUrl>/open/identity/v1/sso/users/query" \
+  --header "Authorization: Bearer REDACTED" \
+  --header "Content-Type: application/json" \
+  --data-raw '{
+    "client_id": "your-client-id",
+    "phone_number": "+84901234567"
+  }'
+
+Response thành công
+HTTP Status: 200 OK
+
+{
+  "code": 200,
+  "message": "Success",
+  "data": {
+    "user_id": "V-12345",
+    "name": "Nguyễn Văn A",
+    "phone": "+84901234567",
+    "email": "nguyenvana@example.com",
+    "avatar_url": "https://example.com/avatar.jpg",
+    "date_of_birth": "1990-01-15"
+  }
+}
+
+Response lỗi
+HTTP Status: 400 Bad Request (Thiếu cả user_id lẫn phone_number, hoặc phone_number không hợp lệ)
+
+{
+  "code": 400,
+  "message": "Either user_id or phone_number must be provided",
+  "data": null
+}
+
+HTTP Status: 401 Unauthorized (Access token không hợp lệ hoặc đã hết hạn)
+
+{
+  "code": 401,
+  "message": "Unauthorized",
+  "data": null
+}
+
+HTTP Status: 404 Not Found (Không tìm thấy người dùng)
+
+{
+  "code": 404,
+  "message": "User not found",
+  "data": null
+}
+
+Các trường trong Response Data
+Trường	Loại	Mô tả
+user_id	string	ID duy nhất của người dùng trong hệ thống
+name	string	Tên hiển thị của người dùng
+phone	string	Số điện thoại của người dùng (định dạng E.164)
+email	string | null	Email của người dùng (nếu có)
+avatar_url	string | null	URL ảnh đại diện của người dùng (nếu có)
+date_of_birth	string | null	Ngày sinh của người dùng theo định dạng YYYY-MM-DD (nếu có)
+Lưu ý
+Access token cần được lấy trước thông qua OAuth 2.0 Client Credentials flow như mô tả trong Authorization
+Phải cung cấp ít nhất một trong hai trường user_id hoặc phone_number; khi cả hai cùng được cung cấp, user_id sẽ được ưu tiên
+phone_number cần ở định dạng E.164 (ví dụ +84901234567); số không hợp lệ sẽ trả về lỗi 400
+Nếu người dùng không tồn tại, API sẽ trả về lỗi 404 Not Found
+Thông tin người dùng có thể được cache ở phía client để giảm số lượng request không cần thiết

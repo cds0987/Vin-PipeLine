@@ -1,0 +1,153 @@
+Dưới đây là bản tổng hợp + chuẩn hóa lại tài liệu Authorization theo phong cách của một Software Engineer chuyên nghiệp (dễ đọc, có cấu trúc, best practices rõ ràng, usable cho production):
+
+🔐 Open Platform Authorization – Technical Summary
+1. Overview
+Hệ thống sử dụng OAuth 2.0 – Client Credentials Flow để xác thực giữa:
+
+✅ Client Application (backend)
+✅ Open Platform API
+
+→ Không có user context → chỉ dùng cho server-to-server communication
+Goal: Lấy access_token để gọi API.
+
+2. High-level Flow
+Plain TextClient (Backend)    |    | (1) POST /oauth2/token    |     client_id + client_secret    vAuth Server    |    | (2) return access_token (expires_in = 3600s)    vClient stores token    |    | (3) Call API with Authorization: Bearer token    vOpen Platform API    |    | (4) If expired → 401 → repeat step 1Show more lines
+
+3. Implementation Details
+3.1 Step 1 – Get Access Token
+Endpoint
+POST /oauth2/token
+
+Headers
+HTTPContent-Type: application/x-www-form-urlencodedShow more lines
+Body
+Plain Textclient_id={your-client-id}client_secret={your-client-secret}grant_type=client_credentialsscope={your-scope}Show more lines
+Example (cURL)
+Shellcurl --location --request POST "<BaseUrl>/oauth2/token" \--header "Content-Type: application/x-www-form-urlencoded" \--data-raw "client_id=xxx&client_secret=yyy&grant_type=client_credentials&scope=zzz"Show more lines
+Response
+✅ Success
+JSON{  "access_token": "ory_at_*****",  "expires_in": 3599,  "scope": "<scope>",  "token_type": "bearer"}Show more lines
+❌ Error cases:
+JSON{  "error": "invalid_client",  "error_description": "Client authentication failed."}Show more lines
+JSON{  "error": "invalid_scope",  "error_description": "The requested scope is invalid"}Show more lines
+
+3.2 Step 2 – Store Access Token
+Key points
+
+Token expiration: ~3600s (1 hour) [Authorizat...tform Docs]
+Backend phải quản lý lifecycle
+
+Recommended Strategy
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+StrategyDescriptionMemory cacheSimple systemsRedisDistributed systems (recommended)
+Best Practices
+
+Set TTL < 3600s (ví dụ: 3500s)
+Không expose token ra frontend
+Không log token (production logs)
+
+
+3.3 Step 3 – Call API
+Header
+HTTPAuthorization: Bearer {access_token}Content-Type: application/jsonShow more lines
+Example (Node.js)
+JavaScriptconst axios = require('axios');async function callAPI(token) {  try {    const res = await axios.get('<BaseUrl>/open/foo/bar', {      headers: {        Authorization: `Bearer ${token}`,        'Content-Type': 'application/json'      }    });    return res.data;  } catch (err) {    console.error(err.response?.data || err.message);    throw err;  }}``Show more lines
+
+3.4 Step 4 – Handle Expired Token
+Behavior
+
+Token hết hạn → API trả 401 Unauthorized [Authorizat...tform Docs]
+
+Handling Strategy
+Plain Textpseudo isn’t fully supported. Syntax highlighting is based on Plain Text.if (response.status == 401):    refresh_token()    retry_request()Show more lines
+
+4. Production-grade Design
+4.1 Token Manager Pattern
+Thay vì gọi token mỗi request → dùng Token Manager Service
+Example Architecture
+Plain Text              +-------------------+              |   Token Manager   |              |-------------------|              | - cache token     |              | - refresh logic   |              +---------+---------+                        |                        vClient Services -----> API CallsShow more lines
+
+4.2 Pseudocode
+JavaScriptclass TokenManager {  constructor() {    this.token = null;    this.expiry = null;  }  async getToken() {    if (!this.token || Date.now() >= this.expiry) {      await this.refreshToken();    }    return this.token;  }  async refreshToken() {    const res = await axios.post('/oauth2/token', { ... });    this.token = res.data.access_token;    this.expiry = Date.now() + res.data.expires_in * 1000 - 5000;  }}Show more lines
+
+5. Security Considerations (CRITICAL)
+🔒 MUST DO
+
+Store client_secret only on backend [Authorizat...tform Docs]
+Use HTTPS only [Authorizat...tform Docs]
+Mask token in logs
+Use environment variables / secret manager
+
+❌ NEVER
+
+Commit secrets to Git
+Send token to frontend
+Hardcode credentials
+
+
+6. Common Pitfalls
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ProblemCauseFix401 liên tụcToken expiredimplement refreshinvalid_clientsai client_secretverify configinvalid_scopescope saicheck permissionrate limit/token spamcall token mỗi requestuse caching
+
+7. Engineering Improvements
+Nếu build production system → nên thêm:
+
+✅ Retry with exponential backoff
+✅ Circuit breaker
+✅ Observability (log + metrics)
+✅ Secret rotation
+✅ Token pre-fetch (refresh trước expiry)
+
+
+8. TL;DR (Senior-level)
+
+Use OAuth2 Client Credentials
+Cache token (don’t request per call)
+Handle 401 → refresh → retry
+Secure secrets aggressively
+Centralize token logic (Token Manager)

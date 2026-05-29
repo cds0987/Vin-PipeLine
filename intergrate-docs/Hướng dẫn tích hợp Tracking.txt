@@ -1,0 +1,153 @@
+Hướng dẫn tích hợp Tracking
+Để gửi sự kiện lên hệ thống V-Tracking, bạn cần tích hợp Snowplow Tracker vào ứng dụng. Dưới đây là tài liệu chính thức từ Snowplow cho từng nền tảng.
+
+Cài đặt SDK Snowplow
+Chọn SDK tương ứng với công nghệ bạn đang sử dụng và làm theo hướng dẫn cài đặt trong tài liệu bên dưới. Sau khi cài đặt, cấu hình endpoint collector theo Tracking Domain & Path tương ứng môi trường của bạn.
+
+Nền tảng	Tài liệu hướng dẫn
+Flutter	Getting Started - Flutter Tracker
+React Native	React Native Tracker
+Web (NPM hoặc JavaScript Tag)	Web Trackers - Quick Start Guide
+Android / iOS (Native)	Mobile Trackers - Installation and Set-up
+Ghi chú
+Flutter: Dùng khi ứng dụng được xây dựng bằng Flutter (cross-platform).
+React Native: Dùng cho ứng dụng React Native.
+Web: Dùng cho web app — có thể tích hợp qua NPM hoặc thẻ JavaScript.
+Android / iOS: Dùng cho ứng dụng native Android (Java/Kotlin) hoặc iOS (Swift/Objective-C).
+Sau khi cài đặt SDK, hãy cấu hình collector endpoint trỏ tới URL phù hợp với môi trường (DEV/SIT/UAT/PRODUCTION) như đã nêu trong Tổng quan.
+
+Cấp Client Key
+Hệ thống dành cho nội bộ nên hiện tại client-key được cấp thủ công (Trong thời gian tới sẽ được cấp trên SuperApp Portal). Để được cấp client-key, thực hiện theo các bước sau:
+
+Bước 1: Cung cấp AppID
+Cung cấp AppID của ứng dụng cần tích hợp tracking. Mỗi môi trường sử dụng một AppID riêng.
+
+Ví dụ với V-App, AppID tương ứng các môi trường như sau:
+
+Môi trường	AppID
+DEV	vn.vsf.app.dev
+SIT	vn.vsf.app.sit
+UAT	vn.vsf.app.uat
+PROD	vn.vsf.app.prod
+Bước 2: Nhận Client Key
+Sau khi có AppID, đội ngũ quản trị sẽ cấp client-key tương ứng cho từng môi trường. Sử dụng client-key này khi cấu hình Snowplow Tracker để xác thực và gửi sự kiện lên V-Tracking.
+
+Gửi Event
+React Example
+Ví dụ cấu hình Snowplow Browser Tracker và gửi event dạng self-describing (Web/React):
+
+import {
+  newTracker,
+  trackSelfDescribingEvent,
+  enableActivityTracking,
+} from '@snowplow/browser-tracker'
+
+const tracker = newTracker('sp1', '<API_URL>', {
+  appId: '<AppID>',
+  platform: 'web',
+  bufferSize: 10,
+  customHeaders: {
+    'client-key': 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+  },
+  contexts: {
+    webPage: true,
+    marketing: true,
+    performanceTiming: true,
+  },
+  eventMethod: 'post',
+  protocol: 'http',
+  respectDoNotTrack: false,
+})
+
+// Enable activity tracking (optional)
+enableActivityTracking({
+  minimumVisitLength: 5,
+  heartbeatDelay: 10,
+})
+
+export function trackPageView(properties = {}) {
+  trackSelfDescribingEvent({
+    tracker: 'sp1',
+    event: {
+      schema: 'iglu:com.example/<AppID>/jsonschema/1-0-0',
+      data: {
+        event_name: 'page_view',
+        miniapp_id: 'vinpearl',
+        vId: '1234',
+        vDeviceId: '997458f7-7adc-4bcf-a620-56d15740e717',
+        properties: {
+          page_path: '/category/bike',
+          page_title: 'Xe máy điện',
+          referrer_page: '/home',
+          is_first_page_in_session: false,
+          app_query: 'id=12345',
+        },
+      },
+    },
+  })
+}
+
+export default tracker
+
+Thay <API_URL>, <AppID> và client-key bằng giá trị thực tế theo Tổng quan và Cấp Client Key ở trên.
+
+Một số lưu ý
+Tài liệu
+V-MiniApp (V-App): Chúng tôi đã hỗ trợ sẵn API reportAnalytics trong V-App. Xem chi tiết các sự kiện (auto-tracked và custom) tại reportAnalytics | V-MiniApp.
+
+Ví dụ gửi event purchase từ MiniApp:
+
+vsf.reportAnalytics('purchase', {
+  order_id: '0_123456',
+  transaction_id: 'TXN_20251108_ABC123',
+  currency: 'VND',
+  value: 150000,
+  payment_method: 'credit_card',
+  items: [
+    {
+      item_id: 'SKU_12345',
+      item_name: 'Stan and Friends Tee',
+      item_price: 50000,
+      item_variant: 'green',
+      item_brand: 'Google',
+      item_category: 'Apparel',
+      item_category2: 'Adult',
+      item_category3: 'Shirts',
+      item_category4: 'Crew',
+      item_category5: 'Short sleeve',
+      quantity: 3,
+    },
+  ],
+})
+
+Event mở rộng (Snowplow): Với event tùy biến gắn trực tiếp từ Snowplow, có thể tham khảo định nghĩa event trong tài liệu: Event Definition (SharePoint).
+
+Cấu trúc payload gửi lên (ví dụ)
+Khi gửi bằng Snowplow (self-describing), payload cần có cấu trúc tương tự:
+
+{
+  "event_name": "page_view",
+  "miniapp_id": "vinpearl",
+  "vId": "1234",
+  "vDeviceId": "997458f7-7adc-4bcf-a620-56d15740e717",
+  "properties": {
+    "page_path": "/category/bike",
+    "page_title": "Xe máy điện",
+    "referrer_page": "/home",
+    "is_first_page_in_session": false,
+    "app_query": "id=12345"
+  }
+}
+
+Tracking Rules
+Rule	Mô tả
+Rule 1	Với Snowplow, chỉ hỗ trợ gửi event dạng trackSelfDescribingEvent.
+Rule 2	Mọi event bắt buộc có event_name. Nếu gửi từ MiniApp thì bắt buộc có miniapp_id.
+Rule 3	Nếu user đã đăng nhập thì gửi kèm vId ở mọi event.
+Tracking doanh thu & marketing
+Để tracking doanh thu và thông tin marketing, app có thể gắn thêm event purchase theo reportAnalytics và tài liệu Event Definition ở trên.
+App có thể gắn thêm track_utm theo tài liệu trên để thu thập attribution (UTM).
+Previous
+Tổng quan
+Next
+Danh sách custom even

@@ -1,0 +1,144 @@
+Danh sách custom events
+Tài liệu mô tả các custom events trong V-Tracking: tên event, tham số, kiểu, bắt buộc, ví dụ.
+
+Quy tắc áp dụng cho tất cả custom events
+Mỗi event bắt buộc có event_name.
+Mỗi event bắt buộc có một trong hai kiểu định danh:
+vId
+hash_phone và hash_email — cả hai đều là chuỗi đã băm SHA-256.
+customer_id không bắt buộc — có thể gửi kèm trong bất kỳ event nào.
+Danh sách chi tiết theo event_name
+add_to_cart
+Ghi nhận khi người dùng thêm sản phẩm vào giỏ.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+currency	string		VND	Đơn vị tiền tệ
+value	number		178000	Tổng giá trị các sản phẩm vừa thêm vào giỏ
+items	Items[]	✓		Xem mục cấu trúc Item.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+app_screen_view
+Ghi nhận khi người dùng xem màn hình.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+screen_path	string	✓	/home	Đường dẫn màn hình.
+screen_name	string		Home Screen	Tên màn hình.
+screen_category	string		home	Phân loại.
+screen_class	string		HomeViewController	Tên class của màn hình (mobile).
+previous_screen_path	string		/view_product	Màn hình ngay trước khi chuyển sang màn hình hiện tại.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+apply_promotion
+Ghi nhận khi người dùng áp dụng mã ưu đãi.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+coupon_code	string	✓	SALE20	Mã ưu đãi (có thể mã hóa SHA256).
+coupon_type	string	✓	PERCENTAGE_DISCOUNT	Loại ưu đãi (giảm theo giá cố định hoặc %).
+value	number	✓	20000, 0.2	Giá trị của coupon (giảm theo giá cố định hoặc %).
+max_value	number		100000	Giá trị tối đa của coupon (cho giảm giá theo %).
+min_value	number		10000	Giá trị tối thiểu của coupon (cho giảm giá theo %).
+currency	string	✓	VND	Đơn vị tiền tệ.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+begin_checkout
+Ghi nhận khi người dùng bắt đầu bước thanh toán từ giỏ (trước event purchase).
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+currency	string	✓	VND	Đơn vị tiền tệ.
+value	number	✓	250000	Tổng tạm tính ở bước checkout.
+items	Items[]	✓		Xem mục cấu trúc Item.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+cancel_order
+Ghi nhận khi người dùng hủy đơn hàng.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+order_id	string	✓	ORD_123	Mã đơn bị huỷ.
+reason	string		Hết hàng	Lý do: timeout, hết hàng, …
+cancel_stage	string		after_payment	Giai đoạn huỷ: trước/ sau thanh toán, …
+items	Items[]	✓		Xem mục cấu trúc Item.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+login
+Ghi nhận khi người dùng đăng nhập thành công.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+method	string		phone	Cách thức đăng nhập: email, phone,...
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		
+logout
+Ghi nhận khi người dùng đăng xuất thành công.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		
+page_view
+Ghi nhận khi người dùng xem trang.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+page_path	string	✓	/home	Đường dẫn trang.
+page_title	string		Home	Tên trang.
+page_category	string		home	Phân loại.
+referrer_page	string		/view_product	Trang ngay trước khi chuyển sang trang hiện tại.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+purchase
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+currency	string	✓	VND	Đơn vị tiền tệ.
+order_id	string	✓	ORD_123	Mã đơn hàng.
+value	number	✓	250000	Tổng giá trị đơn hàng (thực trả).
+discount_amount	number		50000	Tổng giá trị khuyến mãi.
+payment_method	string	✓	VSMART_PAY	Cách thức thanh toán.
+items	Items[]	✓		Xem mục cấu trúc Item.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+return_order
+Ghi nhận khi người dùng hoàn đơn.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+order_id	string	✓	ORD_123	Mã đơn hàng.
+reason	string		Sản phẩm bị lỗi	Lý do hoàn đơn
+items	Items[]	✓		Xem mục cấu trúc Item.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+remove_from_cart
+Ghi nhận khi người dùng bỏ hoặc giảm số lượng sản phẩm trong giỏ.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+currency	string		VND	Đơn vị tiền tệ
+value	number		178000	Tổng giá trị các sản phẩm vừa thêm vào giỏ
+items	Items[]	✓		Xem mục cấu trúc Item.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+search
+Ghi nhận khi người dùng thực hiện tìm kiếm.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+search_term	string	✓	cà phê	Chuỗi user nhập.
+category	string		food	Lọc danh mục, nếu áp.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+sign_up
+Ghi nhận khi người dùng đăng ký tài khoản.
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+method	string		phone	Cách thức đăng ký: email, phone,...
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+view_item
+Ghi nhận khi xem màn chi tiết sản phẩm / dịch vụ (cấu trúc từng món: mục Item).
+
+Tên params	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+currency	string	✓	VND	Đơn vị tiền.
+value	number	✓	89000	Trị giá ước tính món đang xem.
+items	Items[]	✓		Xem mục cấu trúc Item.
+vId / hash_phone / hash_email / customer_id	string	theo yêu cầu		Định danh.
+Item
+Tên thuộc tính	Kiểu dữ liệu	Bắt buộc	Ví dụ	Mô tả
+item_id	string	✓	ITEM_1	Định danh sản phẩm.
+item_name	string	✓	Iphone 17 Pro Max	Tên hiển thị.
+item_price	number	✓	80000	Giá gốc của sản phẩm.
+item_category	string	✓	PHONE	Nhóm sản phẩm.
+quantity	number	✓	1	Số lượng món hàng.
+currency	string	✓	VND	Đơn vị tiền tệ.
+value	number	✓	70000	Giá trị thực trả.
+discount_amount	number		10000	Tổng giá trị ưu đãi.
+shop_id	string		SHOP_1	Tùy nghiệp vụ Food, định danh cửa hàng.
+shop_name	string		Apple	Tùy nghiệp vụ Food, tên cửa hàng.
+pickup_address	string		72 Lê Thánh Tôn	Dành cho dịch vụ: Đặt xe, Giao hàng,...
+pickup_ward	string		Phường Bến Nghé	Dành cho dịch vụ: Đặt xe, Giao hàng,...
+pickup_city	string		Thành phố Hồ Chí Minh	Dành cho dịch vụ: Đặt xe, Giao hàng,...
+destination_address	string		279 Phan Đình Phùng	Dành cho dịch vụ: Đặt xe, Giao hàng,...
+destination_ward	string		Phường Cầu Kiệu	Dành cho dịch vụ: Đặt xe, Giao hàng,...
+destination_city	string		Thành phố Hồ Chí Minh	Dành cho dịch vụ: Đặt xe, Giao hàng,...
+Previous
+Tích hợp
+Next
+App Mesh SDK

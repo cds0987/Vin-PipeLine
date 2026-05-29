@@ -1,0 +1,18 @@
+Tổng quan nền tảng Experiment
+Nền tảng Experiment (V-Experiment) là hệ thống quản lý thí nghiệm A/B và feature flags, giúp triển khai thử nghiệm tính năng, đo lường tác động và điều khiển trải nghiệm người dùng theo từng phân khúc trong hệ sinh thái VSF.
+
+Thông tin chung
+Experiment Management System
+Các môi trường và địa chỉ truy cập hệ thống quản lý thí nghiệm:
+
+Environment	API HOST	Ghi chú
+DEV	https://api.dev.vsf.services/experiment-tracking/	Gửi email vsf.dir.plat11@vingroup.net để xin quyền
+SIT	https://api.sit.vsf.services/experiment-tracking/	Gửi email vsf.dir.plat11@vingroup.net để xin quyền
+UAT	https://api.uat.vsf.services/experiment-tracking/	Gửi email vsf.dir.plat11@vingroup.net để xin quyền
+PRODUCTION	https://api.v-app.vn/experiment-tracking/	Gửi email vsf.dir.plat11@vingroup.net để xin quyền
+Lưu ý: Hệ thống dành cho nội bộ. Để được cấp quyền truy cập bất kỳ môi trường nào, vui lòng liên hệ vsf.dir.plat11@vingroup.net.
+
+Previous
+Experiment
+Next
+Tích hợp

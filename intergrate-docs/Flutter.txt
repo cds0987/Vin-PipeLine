@@ -1,0 +1,323 @@
+Flutter
+Yêu cầu hệ thống
+Flutter SDK >=3.5.0
+Dart SDK >=3.0.0
+iOS 12.0+ / Android API 24+
+Cài đặt
+Thêm repository pub của JFrog vào file pubspec.yaml của bạn và thêm dependency:
+
+dependencies:
+  vsf_vid_sdk_flutter:
+    hosted:
+      name: vsf_vid_sdk_flutter
+      url: https://jfrog.vinsmartfuture.tech/artifactory/api/pub/vsf-ptnt-pub-local
+    version: ^0.1.4
+
+
+Sau đó chạy lệnh:
+
+flutter pub get
+
+Thiết lập Nền tảng (Platform Setup)
+iOS
+Thêm scheme cho URI chuyển hướng vào file ios/Runner/Info.plist của bạn:
+
+<key>CFBundleURLTypes</key>
+<array>
+    <dict>
+        <key>CFBundleURLSchemes</key>
+        <array>
+            <string>yourapp</string>
+        </array>
+        <key>CFBundleURLName</key>
+        <string>vn.vsf.vid.sdk</string>
+    </dict>
+</array>
+
+Android
+Thêm manifest placeholder cho scheme chuyển hướng trong file android/app/build.gradle.kts (hoặc build.gradle):
+
+android {
+    defaultConfig {
+        manifestPlaceholders["vidRedirectScheme"] = "yourapp"
+    }
+}
+
+Hoặc đối với Groovy:
+
+android {
+    defaultConfig {
+        manifestPlaceholders = [vidRedirectScheme: "yourapp"]
+    }
+}
+
+Scheme này phải khớp với phần scheme trong redirectUri của bạn (ví dụ: yourapp trong yourapp://callback).
+
+Cách sử dụng
+Khởi tạo (Initialize)
+Khởi tạo càng sớm càng tốt, thông thường trong main() hoặc widget gốc (root widget) của bạn:
+
+import 'package:vsf_vid_sdk_flutter/vsf_vid_sdk_flutter.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await VsfVidSdk.initialize(VsfVidConfig(
+    clientId: 'your_client_id',
+    redirectUri: 'yourapp-dev://callback',
+    environment: VidEnvironment.dev,
+    scopes: ['openid', 'profile', 'email', 'phone', 'offline'],
+    // authorizationUrl: 'https://your-backend.com/auth', // Tùy chọn: xem phần `authorizationUrl` bên dưới
+  ));
+
+  runApp(const MyApp());
+}
+
+
+Lưu ý về authorizationUrl: Tham số này là tùy chọn và được dùng khi backend của bạn tự tạo URL ủy quyền (xem Phương án 2 bên dưới).
+
+Môi trường (Environments):
+
+Môi trường	Server Ủy quyền (Authorization Server)	Server Token (Token Server)
+VidEnvironment.dev	auth.dev.vsf.services	api.dev.vsf.services
+VidEnvironment.sit	auth.sit.vsf.services	api.sit.vsf.services
+VidEnvironment.uat	auth.uat.vsf.services	api.uat.vsf.services
+VidEnvironment.production (mặc định)	auth.v-app.vn	api.v-app.vn
+Lưu ý: redirectUri nên khác nhau cho từng môi trường (ví dụ: yourapp-dev://callback, yourapp://callback cho production). Hãy cập nhật tương ứng cho cả URL schemes trong Info.plist của iOS và manifestPlaceholders của Android. Đăng ký mỗi redirect URI trên V-ID.
+
+Đăng nhập (SSO)
+V-ID SDK hỗ trợ 2 phương thức đăng nhập — chọn 1 trong 2 tùy theo cách backend của bạn xử lý URL ủy quyền. Xem Sơ đồ luồng Authorization Code + PKCE để hiểu rõ quy trình.
+
+Phương án 1 — Trao đổi Token tại Client: SDK tự tạo URL ủy quyền (kèm PKCE) và trực tiếp đổi mã code lấy token. Phù hợp khi app tự quản lý token.
+Phương án 2 — authorizationUrl do Backend tạo: Backend tự tạo toàn bộ URL ủy quyền; SDK chỉ mở URL và lắng nghe callback. Phù hợp khi backend cần gắn state/nonce tùy chỉnh hoặc tự đổi token.
+Phương án 1 — Trao đổi Token tại Client
+try {
+  // Bước 1: Ủy quyền — mở trình duyệt, trả về authorization response
+  final authResponse = await VsfVidSdk.authorize();
+
+  // Bước 2: Đổi mã (code) lấy token
+  final tokens = await VsfVidSdk.exchangeToken(authResponse);
+
+  print('Access Token: ${tokens.accessToken}');
+  print('Refresh Token: ${tokens.refreshToken}');
+  print('ID Token: ${tokens.idToken}');
+  print('Expires In: ${tokens.expiresIn}s');
+  print('Scope: ${tokens.scope}');
+
+  // Lưu trữ token an toàn (ví dụ: flutter_secure_storage)
+
+} on VidException catch (e) {
+  print('Ủy quyền thất bại: ${e.code} — ${e.message}');
+}
+
+SDK sẽ:
+
+Tạo một mã kiểm tra PKCE (code verifier) và mã thách thức (challenge)
+Mở trình duyệt hệ thống (ASWebAuthenticationSession trên iOS, Chrome Custom Tabs trên Android)
+Người dùng xác thực (hoặc bỏ qua nếu đã có phiên SSO)
+Bắt callback và trả về AuthorizationResponse
+Khi gọi exchangeToken(), thực hiện POST đến endpoint token và trả về TokenResponse
+Phương án 2 — authorizationUrl do Backend tạo
+Nếu backend của bạn xây dựng toàn bộ URL ủy quyền (bao gồm cả tham số PKCE), hãy truyền URL đó thông qua VsfVidConfig.authorizationUrl ở bước khởi tạo. SDK sẽ mở URL và bắt callback mà không cần tự tạo bộ tham số PKCE.
+
+Nếu URL chứa query parameter redirect_uri, SDK sẽ tự động sử dụng nó để khớp với callback. Nếu không, redirectUri đã cấu hình trong VsfVidConfig sẽ được sử dụng.
+
+try {
+  // 1. Lấy authorization URL từ backend của bạn
+  final backendUrl = await myApi.getAuthorizationUrl();
+  // VD: "https://auth.uat.vsf.services/oauth2/auth?response_type=code&client_id=...&redirect_uri=myapp://callback&..."
+
+  // 2. Khởi tạo SDK với URL từ backend
+  await VsfVidSdk.initialize(VsfVidConfig(
+    clientId: 'your-client-id',
+    redirectUri: 'myapp://callback',
+    environment: VidEnvironment.uat,
+    authorizationUrl: backendUrl,
+  ));
+
+  // 3. Ủy quyền — SDK sử dụng authorizationUrl từ config, không tạo thêm PKCE
+  final authResponse = await VsfVidSdk.authorize();
+
+  // 4. Gửi mã (code) về backend của bạn để đổi token
+  //    (code/codeVerifier có thể là null nếu backend xử lý mọi thứ)
+  if (authResponse.code != null) {
+    await sendToBackend(code: authResponse.code!);
+  } else {
+    // Backend đã đổi mã code — đọc các tham số tùy chỉnh
+    final sessionToken = authResponse.customParams['session_token'];
+    print('Session Token: $sessionToken');
+  }
+
+} on VidException catch (e) {
+  print('Ủy quyền thất bại: ${e.code} — ${e.message}');
+}
+
+
+Lưu ý:
+
+authResponse.code và authResponse.codeVerifier có thể mang giá trị null (nếu SDK không tự tạo PKCE).
+Việc xác thực trạng thái (state validation) bị bỏ qua do backend đã tự quản lý tham số state.
+redirect_uri bên trong URL sẽ quyết định scheme nào mà SDK sẽ lắng nghe khi callback.
+Làm mới Token (Refresh Token)
+Khi access token hết hạn, sử dụng refresh token:
+
+try {
+  final tokens = await VsfVidSdk.refreshToken(storedRefreshToken);
+  // Cập nhật token đã lưu
+  print('Access Token mới: ${tokens.accessToken}');
+
+} on VidException catch (e) {
+  if (e.code == 'VID_TOKEN_EXCHANGE_FAILED') {
+    // Refresh token đã hết hạn — chuyển hướng đăng nhập lại
+    print('Làm mới thất bại, vui lòng xác thực lại');
+  }
+}
+
+Tắt SDK (Shutdown)
+Dọn dẹp khi SDK không còn được sử dụng:
+
+await VsfVidSdk.shutdown();
+
+Xử lý Lỗi
+Tất cả các lỗi đều được throw ra dưới dạng VidException:
+
+try {
+  final authResponse = await VsfVidSdk.authorize();
+  final tokens = await VsfVidSdk.exchangeToken(authResponse);
+} on VidException catch (e) {
+  switch (e.code) {
+    case 'VID_NOT_INITIALIZED':
+      // SDK chưa được khởi tạo — gọi initialize() trước
+      break;
+    case 'VID_INVALID_CONFIG':
+      // Cấu hình không hợp lệ
+      break;
+    case 'VID_AUTH_CANCELLED':
+      // Người dùng đã đóng trình duyệt
+      break;
+    case 'VID_AUTH_FAILED':
+      // Authorization server trả về lỗi
+      break;
+    case 'VID_INVALID_STATE':
+      // State không khớp — có thể là tấn công CSRF
+      break;
+    case 'VID_TOKEN_EXCHANGE_FAILED':
+      // Quá trình đổi mã (code) lấy token thất bại
+      break;
+    case 'VID_NETWORK_ERROR':
+      // Vấn đề kết nối mạng
+      break;
+    case 'VID_INVALID_RESPONSE':
+      // Định dạng response từ server không như mong đợi
+      break;
+  }
+}
+
+Ví dụ Hoàn chỉnh
+import 'package:flutter/material.dart';
+import 'package:vsf_vid_sdk_flutter/vsf_vid_sdk_flutter.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await VsfVidSdk.initialize(VsfVidConfig(
+    clientId: 'your_client_id',
+    redirectUri: 'yourapp-dev://callback',
+    environment: VidEnvironment.dev,
+  ));
+
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const MaterialApp(home: LoginScreen());
+  }
+}
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  String _status = 'Chưa đăng nhập';
+  TokenResponse? _tokens;
+
+  Future<void> _login() async {
+    setState(() => _status = 'Đang đăng nhập...');
+    try {
+      final authResponse = await VsfVidSdk.authorize();
+      final tokens = await VsfVidSdk.exchangeToken(authResponse);
+      setState(() {
+        _tokens = tokens;
+        _status = 'Đã đăng nhập (hết hạn trong ${tokens.expiresIn}s)';
+      });
+    } on VidException catch (e) {
+      setState(() => _status = 'Lỗi: ${e.code}');
+    }
+  }
+
+  Future<void> _refresh() async {
+    final rt = _tokens?.refreshToken;
+    if (rt == null) return;
+    try {
+      final tokens = await VsfVidSdk.refreshToken(rt);
+      setState(() {
+        _tokens = tokens;
+        _status = 'Đã làm mới (hết hạn trong ${tokens.expiresIn}s)';
+      });
+    } on VidException catch (e) {
+      setState(() => _status = 'Lỗi làm mới: ${e.code}');
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('V-ID SDK Demo')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(_status, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 24),
+            ElevatedButton(onPressed: _login, child: const Text('Đăng nhập')),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: _tokens != null ? _refresh : null,
+              child: const Text('Làm mới Token (Refresh Token)'),
+            ),
+            if (_tokens != null) ...[
+              const SizedBox(height: 24),
+              Text('Access Token: ${_tokens!.accessToken.substring(0, 20)}...'),
+              Text('Token Type: ${_tokens!.tokenType}'),
+              Text('Expires In: ${_tokens!.expiresIn}s'),
+              if (_tokens!.scope != null) Text('Scope: ${_tokens!.scope}'),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+Khắc phục sự cố
+iOS: Lỗi "No URL scheme registered"
+Đảm bảo bạn đã thêm URL scheme trong ios/Runner/Info.plist. Scheme này phải khớp với phần scheme của redirectUri.
+
+Android: Không nhận được Callback sau khi đăng nhập
+Xác minh lại biến manifestPlaceholders["vidRedirectScheme"] trong android/app/build.gradle.kts
+Đảm bảo scheme khớp chính xác với redirectUri của bạn
+Làm mới Token (Refresh token) báo lỗi
+Refresh token đã hết hạn hoặc bị thu hồi. Hãy chuyển hướng người dùng đến trang đăng nhập lại thông qua authorize().
+
+Gặp lỗi PlatformException trong lúc gọi qua method channel
+Đảm bảo bạn đã gọi VsfVidSdk.initialize() trước khi sử dụng bất kỳ hàm nào khác của SDK. Bao bọc các lời gọi hàm bằng try-catch để bắt lỗi VidException.

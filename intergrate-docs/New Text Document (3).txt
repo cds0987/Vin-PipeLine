@@ -1,0 +1,599 @@
+Luồng Authorization Code PKCE
+Giới thiệu PKCE
+PKCE (Proof Key for Code Exchange, đọc là "pixy") là mở rộng của luồng Authorization Code trong OAuth 2.0. Trong luồng Authorization Code truyền thống, client gửi authorization code kèm client_secret (với confidential client) để đổi lấy token. Điểm yếu: nếu kẻ tấn công đánh chặn được authorization code (vd từ URL callback, log, hoặc referrer), chúng có thể dùng code đó để đổi lấy token nếu có thêm client_secret hoặc trong một số cấu hình kém an toàn.
+
+PKCE bổ sung hai thành phần:
+
+Code Verifier: Chuỗi ngẫu nhiên do client (hoặc backend, tùy kiến trúc) tạo ra và chỉ giữ bí mật cho đến lúc đổi code.
+Code Challenge: Giá trị băm (vd SHA-256) của code verifier, gửi công khai trong authorization request. Authorization server lưu code challenge gắn với authorization code.
+Khi đổi code lấy token, client/backend phải gửi đúng code_verifier gốc. Server tính lại challenge từ code_verifier và so sánh với challenge đã lưu — chỉ cấp token khi khớp. Vì vậy:
+
+Chỉ bên nắm code_verifier mới đổi được authorization code thành token.
+Dù kẻ tấn công đánh chặn được authorization code, chúng không thể đổi code lấy token nếu không có code_verifier tương ứng.
+Nhờ đó PKCE bảo mật hơn luồng Authorization Code thuần: nó ràng buộc authorization code với một secret (code_verifier) không đi qua URL hay môi trường dễ lộ. PKCE cũng cho phép public client (SPA, app mobile) dùng luồng authorization code mà không cần lưu client_secret trên client — bảo mật dựa trên code_verifier thay vì client_secret.
+
+Tài liệu này mô tả cách triển khai PKCE khi backend sinh và giữ code_verifier, đổi code lấy token OAuth2 rồi cấp token do ứng dụng của bạn phát hành cho client.
+
+Sơ đồ luồng
+V-ID (IdP)
+Backend ứng dụng
+Client (SPA/Frontend)
+V-ID (IdP)
+Backend ứng dụng
+Client (SPA/Frontend)
+3. Sinh code_verifier, code_challenge, state
+4. Lưu code_verifier theo state
+8b. Bỏ qua đăng nhập
+alt
+[Chưa xác thực]
+[Đã có phiên SSO]
+13. Lấy code_verifier theo state
+16. (Tùy chọn) UserInfo, tạo/cập nhật user, session
+17. Cấp token/session ứng dụng (JWT, cookie)
+Người dùng
+1. Bấm đăng nhập
+2. GET /auth/login (hoặc tương đương)
+5. Trả authorizationUrl (+ state nếu cần)
+6. Redirect đến authorizationUrl
+7. Điều hướng Authorization Endpoint
+8a. Trang đăng nhập / consent
+9a. Đăng nhập & đồng ý
+10. Redirect về callback (code + state)
+11. Vào trang callback (code + state trong URL)
+12. POST /auth/callback { code, state }
+14. Đổi code + code_verifier lấy token
+15. Access / Refresh / ID token
+18. Trả token ứng dụng hoặc Set-Cookie redirect
+19. Đăng nhập thành công — dùng token ứng dụng
+Người dùng
+Hai cách chọn redirect_uri:
+
+Redirect về backend: redirect_uri trỏ tới backend (vd: https://api.yourapp.com/auth/callback). IdP redirect người dùng về backend với code + state; backend xử lý callback, đổi code lấy token, tạo session/token ứng dụng rồi redirect người dùng về frontend (vd kèm Set-Cookie). Client không cần gửi code lên backend qua API.
+Redirect về frontend: redirect_uri trỏ tới frontend (vd: https://app.yourapp.com/callback). Trang callback đọc code + state từ query, gửi lên backend (vd: POST /auth/callback); backend đổi code lấy token và trả token ứng dụng (JSON hoặc redirect + cookie). Tài liệu này mô tả cả hai; ví dụ API bên dưới dùng redirect về frontend rồi client gửi code lên backend.
+Điều kiện cần có
+Cấu hình SSO (V-ID): Đăng ký ứng dụng, lấy client_id (và client_secret nếu dùng confidential client). Cấu hình redirect URI: có thể là URL backend hoặc URL frontend tùy cách triển khai.
+Endpoint SSO:
+Authorization: https://auth.{env}.vsf.services/oauth2/auth
+Token: https://api.{env}.vsf.services/oauth2/token
+Backend: Có thể gọi HTTPS tới IdP, lưu trữ tạm code_verifier theo state (session, Redis, v.v.) với TTL ngắn.
+Luồng từng bước
+Bước 1: Client yêu cầu URL đăng nhập
+Client gọi API backend (vd: GET /auth/login) khi người dùng bấm đăng nhập. Backend sẽ sinh PKCE và trả về URL để client redirect.
+
+Bước 2: Backend sinh Code Verifier và Code Challenge
+Backend tạo code_verifier (chuỗi ngẫu nhiên 43–128 ký tự, chỉ dùng [A-Za-z0-9\-._~]) và code_challenge = BASE64URL(SHA256(code_verifier)), phương pháp S256. Sau đó:
+
+Sinh giá trị state ngẫu nhiên (chống CSRF).
+Lưu code_verifier (và có thể nonce) theo state trong session hoặc store tạm, TTL ngắn (vd 5–10 phút).
+Dựng authorization URL với response_type=code, client_id, redirect_uri, scope, state, code_challenge, code_challenge_method=S256, (và nonce nếu dùng OIDC).
+Ví dụ (Node.js):
+
+const crypto = require('crypto');
+
+function generateCodeVerifier() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+function generateCodeChallenge(verifier) {
+  return crypto.createHash('sha256').update(verifier).digest('base64url');
+}
+
+// Trong handler GET /auth/login
+const codeVerifier = generateCodeVerifier();
+const codeChallenge = generateCodeChallenge(codeVerifier);
+const state = crypto.randomBytes(16).toString('hex');
+// Lưu codeVerifier theo state (session, Redis, ...)
+savePkceState(state, { codeVerifier });
+
+const params = new URLSearchParams({
+  response_type: 'code',
+  client_id: process.env.CLIENT_ID,
+  redirect_uri: process.env.REDIRECT_URI,
+  scope: 'openid profile email',
+  state,
+  code_challenge: codeChallenge,
+  code_challenge_method: 'S256'
+});
+const authorizationUrl = `https://auth.dev.vsf.services/oauth2/auth?${params.toString()}`;
+return { authorizationUrl, state };
+
+
+Bước 3: Chuyển hướng người dùng
+Client nhận authorizationUrl (và có thể state nếu cần gửi lại khi callback), rồi chuyển hướng trình duyệt:
+
+window.location.href = data.authorizationUrl;
+
+Bước 4: Xác thực tại V-ID
+Người dùng vào trang IdP, đăng nhập (nếu chưa có phiên SSO) và đồng ý consent. IdP redirect về redirect_uri kèm code và state (hoặc error nếu lỗi).
+
+Bước 5: Callback và gửi code về backend
+Nếu redirect_uri là frontend: Trang callback (vd /callback) đọc code và state từ query string, gọi backend (vd POST /auth/callback với body { code, state }). Backend kiểm tra state (CSRF), lấy code_verifier đã lưu theo state, rồi gọi token endpoint.
+Nếu redirect_uri là backend: Backend nhận trực tiếp GET /auth/callback?code=...&state=..., kiểm tra state, lấy code_verifier, đổi code lấy token, tạo session/token ứng dụng và redirect người dùng về frontend (vd kèm cookie).
+Luôn xác thực state và chỉ dùng code_verifier một lần (xóa sau khi dùng).
+
+Bước 6: Backend đổi code lấy OAuth2 token
+Backend gọi token endpoint của IdP:
+
+POST https://api.dev.vsf.services/oauth2/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code=<code>&redirect_uri=<redirect_uri>&client_id=<client_id>&code_verifier=<code_verifier>
+
+
+(Nếu là confidential client, có thể thêm client_secret.) IdP trả về access_token, refresh_token, id_token, expires_in, scope. Backend không trả các token này ra client.
+
+Bước 7: Backend cấp token/session ứng dụng
+Backend dùng OAuth2 token (vd gọi UserInfo, hoặc decode id_token) để xác định user, tạo hoặc cập nhật user/session trong hệ thống của bạn, rồi cấp token do ứng dụng phát hành cho client, ví dụ:
+
+JWT do backend ký, chứa claims nghiệp vụ (user id, role, v.v.),
+Session cookie (session ID lưu server),
+Hoặc opaque token kèm metadata lưu ở backend.
+Response cho client có thể là:
+
+JSON: { "token": "<app_jwt>", "expiresIn": 3600 }, hoặc
+Redirect về frontend với Set-Cookie (session cookie).
+Client chỉ lưu và gửi token ứng dụng khi gọi API của bạn; không bao giờ nhận hay lưu access/refresh/id token của IdP.
+
+API contract (ví dụ)
+Lấy URL đăng nhập
+Request:
+
+GET /your/backend/auth/url
+
+Response (200):
+
+{
+  "authorizationUrl": "https://auth.dev.vsf.services/oauth2/auth?response_type=code&client_id=...&redirect_uri=...&state=...&code_challenge=...&code_challenge_method=S256",
+  "state": "abc123..."
+}
+
+
+Client redirect: window.location.href = response.authorizationUrl.
+
+Callback (khi redirect_uri là frontend)
+Request:
+
+POST /your/app/auth/callback
+Content-Type: application/json
+
+{
+  "code": "AUTH_CODE_FROM_IDP",
+  "state": "abc123..."
+}
+
+Response (200):
+
+{
+  "token": "eyJhbGc...",
+  "expiresIn": 3600,
+  "user": { "id": "...", "email": "..." }
+}
+
+Hoặc response 302 redirect về frontend với Set-Cookie (session).
+
+Lỗi (4xx): state không hợp lệ, code đã dùng/hết hạn, v.v. Trả message phù hợp cho client hiển thị.
+
+Xử lý sự cố
+invalid_grant / Code verifier validation failed
+
+Đảm bảo backend gửi đúng code_verifier (giá trị gốc đã lưu theo state), không gửi code_challenge.
+Kiểm tra base64url: không padding =, dùng - và _ thay cho + và /.
+Code chỉ dùng một lần; nếu callback gọi hai lần sẽ lỗi.
+State không tồn tại hoặc không khớp
+
+State hết TTL hoặc đã bị xóa sau lần dùng. Yêu cầu user đăng nhập lại.
+Có thể là CSRF; luôn validate state trước khi đổi code.
+Redirect URI mismatch
+
+Giá trị redirect_uri khi gọi token endpoint phải giống hệt với redirect_uri trong authorization request và với URI đã đăng ký ở IdP.
+Client không nhận được token ứng dụng
+
+Kiểm tra backend đã đổi code thành công và trả đúng body/redirect; kiểm tra CORS và cookie (SameSite, Secure) nếu dùng cookie.
+
+
+
+
+
+1. Tổng quan
+
+Luồng này mô tả cách ứng dụng đăng nhập người dùng thông qua V-ID Identity Provider bằng cơ chế Authorization Code Flow có PKCE.
+
+Các thành phần tham gia:
+
+Thành phần	Vai trò
+Người dùng	Bắt đầu thao tác đăng nhập
+Client SPA / Frontend	Giao diện người dùng, điều hướng login/callback
+Backend ứng dụng	Sinh PKCE, lưu state/session, đổi code lấy token
+V-ID IdP	Hệ thống định danh, xác thực người dùng và cấp token
+
+Mục tiêu chính:
+
+Không để frontend trực tiếp xử lý client secret.
+Chống CSRF bằng state.
+Chống đánh cắp authorization code bằng PKCE: code_verifier và code_challenge.
+Backend là nơi đổi code lấy token và thiết lập session cho ứng dụng.
+2. Luồng chi tiết
+Bước 1: Người dùng bấm đăng nhập
+
+Người dùng chọn Đăng nhập trên giao diện SPA.
+
+Frontend gọi backend:
+
+GET /auth/login
+Bước 2: Backend tạo PKCE và state
+
+Backend sinh các giá trị:
+
+code_verifier
+code_challenge
+state
+
+Trong đó:
+
+Giá trị	Mục đích
+code_verifier	Chuỗi bí mật backend giữ lại để đổi code lấy token
+code_challenge	Giá trị hash từ code_verifier, gửi sang V-ID
+state	Chống CSRF, xác nhận callback hợp lệ
+
+Backend lưu code_verifier theo state, ví dụ trong Redis hoặc session storage:
+
+state -> code_verifier
+
+Có thể lưu thêm:
+
+state -> redirect_uri
+state -> return_url
+state -> created_at
+Bước 3: Backend trả authorization URL cho frontend
+
+Backend trả về URL đăng nhập của V-ID:
+
+{
+  "authorizationUrl": "https://v-id.example.com/oauth/authorize?..."
+}
+
+Authorization URL thường chứa:
+
+response_type=code
+client_id=...
+redirect_uri=...
+scope=openid profile email
+state=...
+code_challenge=...
+code_challenge_method=S256
+Bước 4: Frontend redirect người dùng sang V-ID
+
+Frontend điều hướng browser tới authorizationUrl.
+
+window.location.href = authorizationUrl;
+Bước 5: V-ID xử lý xác thực
+
+Tại V-ID, có 2 trường hợp:
+
+Trường hợp 1: Chưa xác thực
+
+Người dùng được yêu cầu:
+
+Đăng nhập
+Consent / đồng ý cấp quyền nếu cần
+Trường hợp 2: Đã có phiên SSO
+
+V-ID có thể bỏ qua bước đăng nhập và tiếp tục cấp authorization code.
+
+Bước 6: V-ID redirect về callback
+
+Sau khi xác thực thành công, V-ID redirect browser về redirect_uri đã đăng ký.
+
+Ví dụ:
+
+GET /auth/callback?code=abc123&state=xyz456
+
+Các tham số quan trọng:
+
+Tham số	Ý nghĩa
+code	Authorization code dùng một lần
+state	Giá trị để backend đối chiếu với state đã lưu
+Bước 7: Frontend gọi backend callback
+
+Frontend nhận URL callback và gọi backend:
+
+POST /auth/callback
+Content-Type: application/json
+
+{
+  "code": "abc123",
+  "state": "xyz456"
+}
+
+Hoặc nếu callback trỏ trực tiếp vào backend thì backend có thể nhận code và state ngay từ query string.
+
+Bước 8: Backend kiểm tra state và lấy code_verifier
+
+Backend thực hiện:
+
+Kiểm tra state có tồn tại không.
+Kiểm tra state còn hạn không.
+Lấy code_verifier tương ứng.
+Xóa state sau khi dùng để tránh replay attack.
+
+Nếu state không hợp lệ, backend trả lỗi:
+
+400 Bad Request
+
+Ví dụ:
+
+{
+  "error": "invalid_state"
+}
+Bước 9: Backend đổi code lấy token
+
+Backend gọi Token Endpoint của V-ID:
+
+POST /oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code
+code=abc123
+redirect_uri=https://app.example.com/auth/callback
+client_id=...
+code_verifier=...
+
+V-ID kiểm tra:
+
+code có hợp lệ không
+redirect_uri có khớp không
+code_verifier có khớp với code_challenge ban đầu không
+authorization code đã được dùng chưa
+
+Nếu hợp lệ, V-ID trả token:
+
+{
+  "access_token": "...",
+  "refresh_token": "...",
+  "id_token": "...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+Bước 10: Backend xử lý token và user session
+
+Backend có thể thực hiện thêm:
+
+Verify id_token.
+Gọi UserInfo Endpoint nếu cần.
+Tạo hoặc cập nhật user trong database.
+Tạo session nội bộ cho ứng dụng.
+Set cookie hoặc trả token nội bộ cho frontend.
+
+Khuyến nghị với SPA:
+
+Set-Cookie: app_session=...; HttpOnly; Secure; SameSite=Lax
+
+Không nên lưu access_token hoặc refresh_token trong localStorage.
+
+Bước 11: Backend redirect hoặc trả kết quả cho frontend
+
+Có 2 cách phổ biến.
+
+3. Hai cách chọn redirect_uri
+Cách 1: redirect_uri trỏ về Frontend
+
+Ví dụ:
+
+https://app.example.com/auth/callback
+
+Luồng:
+
+V-ID redirect về frontend kèm code và state.
+Frontend đọc query params.
+Frontend gọi backend:
+POST /auth/callback
+Backend đổi code lấy token.
+Backend set session hoặc trả token nội bộ.
+Frontend điều hướng vào app.
+
+Ưu điểm:
+
+Dễ xử lý UX phía frontend.
+Phù hợp với SPA route như /auth/callback.
+
+Nhược điểm:
+
+code xuất hiện trên URL frontend.
+Cần frontend xử lý callback cẩn thận.
+Phải tránh log URL chứa code.
+Cách 2: redirect_uri trỏ về Backend
+
+Ví dụ:
+
+https://api.example.com/auth/callback
+
+Luồng:
+
+V-ID redirect trực tiếp về backend.
+Backend nhận code và state.
+Backend đổi code lấy token.
+Backend set cookie session.
+Backend redirect người dùng về frontend:
+302 Found
+Location: https://app.example.com
+
+Ưu điểm:
+
+Frontend không cần xử lý authorization code.
+Backend kiểm soát toàn bộ quá trình xác thực.
+Bảo mật hơn và đơn giản hơn cho SPA.
+
+Nhược điểm:
+
+Backend phải xử lý redirect UX.
+Cần cấu hình cookie domain / SameSite chính xác nếu frontend và backend khác domain.
+
+Khuyến nghị: với SPA có backend riêng, nên ưu tiên redirect_uri về backend.
+
+4. API đề xuất
+GET /auth/login
+
+Tạo authorization URL.
+
+Response
+{
+  "authorizationUrl": "https://v-id.example.com/oauth/authorize?response_type=code&client_id=..."
+}
+POST /auth/callback
+
+Dùng khi callback về frontend rồi frontend gửi code về backend.
+
+Request
+{
+  "code": "authorization_code",
+  "state": "state_value"
+}
+Response
+{
+  "success": true,
+  "redirectUrl": "/"
+}
+
+Hoặc backend có thể set cookie:
+
+Set-Cookie: app_session=...; HttpOnly; Secure; SameSite=Lax
+GET /auth/callback
+
+Dùng khi callback trỏ thẳng về backend.
+
+Request
+GET /auth/callback?code=abc123&state=xyz456
+Response
+302 Found
+Location: https://app.example.com
+POST /auth/logout
+
+Đăng xuất khỏi ứng dụng.
+
+POST /auth/logout
+
+Backend thực hiện:
+
+Xóa session ứng dụng.
+Xóa cookie.
+Có thể redirect sang logout endpoint của V-ID nếu cần single logout.
+5. Lưu trữ session và token
+Backend nên lưu
+access_token
+refresh_token
+id_token claims
+user_id
+session_id
+expires_at
+Frontend nên nhận
+
+Tốt nhất frontend chỉ cần nhận trạng thái đăng nhập:
+
+{
+  "authenticated": true,
+  "user": {
+    "id": "user_id",
+    "name": "Nguyen Van A",
+    "email": "user@example.com"
+  }
+}
+
+Không nên để frontend giữ refresh token.
+
+6. Bảo mật cần lưu ý
+Bắt buộc
+Dùng HTTPS.
+Luôn kiểm tra state.
+Luôn dùng PKCE với S256.
+authorization_code chỉ dùng một lần.
+state và code_verifier phải có TTL ngắn, ví dụ 5–10 phút.
+Xóa state sau khi callback thành công hoặc thất bại.
+Validate redirect_uri khớp với cấu hình ban đầu.
+Cookie khuyến nghị
+HttpOnly
+Secure
+SameSite=Lax
+
+Nếu frontend và backend khác site hoàn toàn, có thể cần:
+
+SameSite=None; Secure
+Không khuyến nghị
+Lưu token trong localStorage.
+Để frontend tự đổi code lấy token nếu có backend.
+Bỏ qua kiểm tra state.
+Dùng code_challenge_method=plain.
+7. Lỗi thường gặp
+Lỗi	Nguyên nhân	Cách xử lý
+invalid_state	State không tồn tại hoặc hết hạn	Login lại
+invalid_grant	Code sai, hết hạn hoặc đã dùng	Login lại
+invalid_redirect_uri	Redirect URI không khớp	Kiểm tra cấu hình V-ID
+pkce_verification_failed	code_verifier không khớp	Kiểm tra cách sinh PKCE
+Cookie không được set	Sai domain hoặc SameSite	Kiểm tra cấu hình cookie
+Frontend login xong vẫn chưa authenticated	Session chưa được tạo hoặc cookie không gửi kèm	Kiểm tra CORS, credentials, cookie
+8. Pseudo code backend
+// GET /auth/login
+async function login(req, res) {
+  const state = randomString();
+  const codeVerifier = randomString();
+  const codeChallenge = sha256Base64Url(codeVerifier);
+
+  await store.set(`oauth:${state}`, {
+    codeVerifier,
+    createdAt: Date.now()
+  }, {
+    ttl: 600
+  });
+
+  const authorizationUrl = buildUrl(VID_AUTHORIZE_ENDPOINT, {
+    response_type: "code",
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    scope: "openid profile email",
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256"
+  });
+
+  return res.json({ authorizationUrl });
+}
+// POST /auth/callback
+async function callback(req, res) {
+  const { code, state } = req.body;
+
+  const stored = await store.get(`oauth:${state}`);
+  if (!stored) {
+    return res.status(400).json({ error: "invalid_state" });
+  }
+
+  await store.delete(`oauth:${state}`);
+
+  const tokenResponse = await http.post(VID_TOKEN_ENDPOINT, {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: REDIRECT_URI,
+    client_id: CLIENT_ID,
+    code_verifier: stored.codeVerifier
+  });
+
+  const user = await upsertUserFromToken(tokenResponse.id_token);
+
+  const session = await createSession(user.id, tokenResponse);
+
+  res.cookie("app_session", session.id, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax"
+  });
+
+  return res.json({
+    success: true
+  });
+}
+9. Kết luận
+
+Luồng trong sơ đồ là mô hình đăng nhập phù hợp cho SPA có backend riêng:
+
+Frontend chỉ điều hướng và hiển thị trạng thái.
+Backend chịu trách nhiệm sinh PKCE, kiểm tra state, đổi code lấy token.
+V-ID đảm nhiệm xác thực người dùng và cấp token.
+Ứng dụng nên dùng session cookie HttpOnly để giảm rủi ro lộ token phía frontend.

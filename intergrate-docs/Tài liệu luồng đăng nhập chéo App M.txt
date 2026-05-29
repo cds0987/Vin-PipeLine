@@ -1,0 +1,448 @@
+Tài liệu luồng đăng nhập chéo App Mesh → Hermes App → V-ID
+1. Tổng quan
+
+Sơ đồ mô tả luồng Cross-App Login giữa các hệ thống:
+
+Thành phần	Vai trò
+V-App	Ứng dụng nguồn, nơi người dùng đã đăng nhập ban đầu
+App Mesh SDK	SDK trung gian dùng để lấy và chuyển seed token
+Hermes App	Ứng dụng đích cần đăng nhập chéo
+Hermes Backend	Backend của Hermes, chịu trách nhiệm đổi token và tạo session
+V-ID	Hệ thống định danh/xác thực trung tâm
+
+Mục tiêu của luồng:
+
+Người dùng đã đăng nhập ở V-App có thể mở Hermes App mà không cần đăng nhập lại.
+V-App cấp một seed token.
+Hermes App gửi seed token về Hermes Backend.
+Hermes Backend gọi V-ID để xác thực seed token.
+Nếu hợp lệ, Hermes Backend tạo phiên đăng nhập cục bộ cho người dùng trong Hermes.
+2. Luồng tổng thể
+
+Luồng gồm 2 phần chính:
+
+Bước chuẩn bị sau khi login ở V-App
+Luồng đăng nhập chéo vào Hermes App
+3. Bước chuẩn bị sau khi login ở V-App
+
+Sau khi người dùng đăng nhập thành công ở V-App, hệ thống cần lưu thông tin seed token vào App Mesh SDK.
+
+Bước 1: V-App lưu seed token
+
+V-App gọi App Mesh SDK để lưu seed token:
+
+AppMeshSDK.setUserInfo({
+  name: user.name,
+  avatar: user.avatar,
+  seedToken: seedToken
+});
+
+Seed token là token dùng để khởi tạo phiên đăng nhập chéo sang ứng dụng khác.
+
+Thông tin có thể bao gồm:
+
+{
+  "name": "Nguyen Van A",
+  "avatar": "https://...",
+  "seedToken": "seed_token_value"
+}
+4. Luồng đăng nhập chéo vào Hermes App
+Bước 2: Hermes App đọc seed token từ App Mesh SDK
+
+Khi người dùng mở Hermes App, Hermes App gọi App Mesh SDK để lấy seed token.
+
+const seedToken = await AppMeshSDK.getSeedToken();
+
+App Mesh SDK trả về seed token đã được V-App lưu trước đó.
+
+Bước 3: Hermes App gửi seed token về Hermes Backend
+
+Hermes App gửi seed token cho backend để thực hiện trao đổi token.
+
+POST /auth/cross-app-login
+Content-Type: application/json
+
+{
+  "token": "seed_token_value"
+}
+
+Hermes App không nên tự gọi trực tiếp V-ID để đổi token nếu hệ thống có backend riêng.
+
+Bước 4: Hermes Backend nhận request token exchange
+
+Hermes Backend nhận request từ Hermes App:
+
+Request Token Exchange
+{
+  token: seedToken
+}
+
+Backend bắt đầu quy trình xác thực seed token với V-ID.
+
+Bước 5: Hermes Backend gọi V-ID
+
+Hermes Backend gọi API của V-ID để gửi seed token và yêu cầu xác minh người dùng.
+
+POST /open/identity/v1/sso/seed/userinfo
+Content-Type: application/json
+Authorization: Bearer <hermes_access_token>
+
+{
+  "seedToken": "seed_token_value"
+}
+
+Trong sơ đồ, bước này được mô tả là:
+
+Gửi Seed Token + Hermes Access Token
+
+Ý nghĩa:
+
+Giá trị	Mục đích
+seedToken	Token do V-App cấp, đại diện cho phiên đăng nhập ban đầu
+Hermes Access Token	Token định danh Hermes Backend khi gọi sang V-ID
+Bước 6: V-ID xác thực seed token
+
+V-ID thực hiện kiểm tra:
+
+Seed token có hợp lệ không.
+Seed token còn hạn không.
+Seed token có đúng định dạng không.
+Seed token có được cấp từ nguồn tin cậy không.
+Hermes Backend có quyền sử dụng API này không.
+
+Nếu hợp lệ, V-ID trả về thông tin người dùng.
+
+Bước 7: V-ID trả user info cho Hermes Backend
+
+V-ID trả về thông tin người dùng:
+
+{
+  "userId": "vid_user_id",
+  "name": "Nguyen Van A",
+  "phone": "0900000000",
+  "email": "user@example.com",
+  "avatar": "https://..."
+}
+
+Các trường trong sơ đồ:
+
+UserID, Name, Phone, Email, Avatar...
+Bước 8: Hermes Backend kiểm tra user cục bộ
+
+Hermes Backend kiểm tra người dùng trong Hermes Database:
+
+Check user_id in Hermes DB
+
+Có 2 trường hợp:
+
+Trường hợp 1: User đã tồn tại
+
+Backend lấy thông tin user hiện có từ Hermes DB.
+
+const user = await userRepository.findByVidUserId(userInfo.userId);
+Trường hợp 2: User chưa tồn tại
+
+Backend tạo user mới hoặc mapping user từ V-ID sang Hermes.
+
+const user = await userRepository.create({
+  vidUserId: userInfo.userId,
+  name: userInfo.name,
+  phone: userInfo.phone,
+  email: userInfo.email,
+  avatar: userInfo.avatar
+});
+Bước 9: Hermes Backend tạo Hermes Token / Local Session
+
+Sau khi xác định được user, Hermes Backend tạo session nội bộ cho Hermes.
+
+Có thể dùng:
+
+Hermes access token nội bộ
+Session ID
+JWT
+Cookie session
+Refresh token nội bộ nếu cần
+
+Ví dụ response token:
+
+{
+  "accessToken": "hermes_access_token",
+  "refreshToken": "hermes_refresh_token",
+  "expiresIn": 3600,
+  "user": {
+    "id": "hermes_user_id",
+    "name": "Nguyen Van A",
+    "email": "user@example.com",
+    "avatar": "https://..."
+  }
+}
+
+Hoặc nếu dùng cookie:
+
+Set-Cookie: hermes_session=...; HttpOnly; Secure; SameSite=Lax
+Bước 10: Hermes Backend trả Hermes Token về Hermes App
+
+Hermes Backend trả token hoặc thông tin session về Hermes App.
+
+Trong sơ đồ:
+
+Trả về Hermes Token
+
+Hermes App lưu trạng thái đăng nhập và chuyển người dùng vào màn hình chính.
+
+Bước 11: Hermes App đăng nhập thành công
+
+Hermes App hoàn tất đăng nhập:
+
+Đăng nhập thành công
+
+Người dùng có thể sử dụng Hermes App mà không phải nhập lại tài khoản/mật khẩu.
+
+5. API đề xuất
+5.1. Lưu seed token ở V-App
+
+API/SDK call phía V-App:
+
+AppMeshSDK.setUserInfo({
+  name: string,
+  avatar: string,
+  seedToken: string
+});
+
+Ví dụ:
+
+await AppMeshSDK.setUserInfo({
+  name: currentUser.name,
+  avatar: currentUser.avatar,
+  seedToken: loginResult.seedToken
+});
+5.2. Hermes App lấy seed token
+const seedToken = await AppMeshSDK.getSeedToken();
+
+Nếu không có seed token:
+
+if (!seedToken) {
+  redirectToLogin();
+}
+5.3. Hermes App gọi Hermes Backend
+POST /auth/cross-app-login
+Content-Type: application/json
+Request
+{
+  "token": "seed_token_value"
+}
+Response thành công
+{
+  "success": true,
+  "accessToken": "hermes_access_token",
+  "refreshToken": "hermes_refresh_token",
+  "user": {
+    "id": "hermes_user_id",
+    "vidUserId": "vid_user_id",
+    "name": "Nguyen Van A",
+    "phone": "0900000000",
+    "email": "user@example.com",
+    "avatar": "https://..."
+  }
+}
+Response lỗi
+{
+  "success": false,
+  "error": "invalid_seed_token"
+}
+5.4. Hermes Backend gọi V-ID
+POST /open/identity/v1/sso/seed/userinfo
+Content-Type: application/json
+Authorization: Bearer <hermes_access_token>
+Request
+{
+  "seedToken": "seed_token_value"
+}
+Response
+{
+  "userId": "vid_user_id",
+  "name": "Nguyen Van A",
+  "phone": "0900000000",
+  "email": "user@example.com",
+  "avatar": "https://..."
+}
+6. Sequence dạng text
+1. V-App -> App Mesh SDK:
+   Lưu seed token sau khi user login ở V-App.
+
+2. Hermes App -> App Mesh SDK:
+   Đọc seed token.
+
+3. App Mesh SDK -> Hermes App:
+   Trả về seed token.
+
+4. Hermes App -> Hermes Backend:
+   Request token exchange với seed token.
+
+5. Hermes Backend -> V-ID:
+   Gửi seed token + Hermes access token.
+
+6. V-ID:
+   Verify seed token.
+
+7. V-ID -> Hermes Backend:
+   Trả về user info.
+
+8. Hermes Backend:
+   Kiểm tra user trong Hermes DB.
+
+9. Hermes Backend:
+   Khởi tạo Hermes token hoặc local session.
+
+10. Hermes Backend -> Hermes App:
+    Trả về Hermes token.
+
+11. Hermes App:
+    Đăng nhập thành công.
+7. Xử lý lỗi
+Mã lỗi	Nguyên nhân	Cách xử lý
+missing_seed_token	Hermes App không lấy được seed token từ App Mesh SDK	Yêu cầu người dùng login lại ở V-App
+invalid_seed_token	Seed token không hợp lệ	Xóa token cũ và login lại
+expired_seed_token	Seed token hết hạn	Refresh hoặc yêu cầu login lại
+vid_verify_failed	V-ID không xác thực được seed token	Kiểm tra request sang V-ID
+hermes_access_denied	Hermes Backend không có quyền gọi API V-ID	Kiểm tra Hermes access token
+user_sync_failed	Không tạo/cập nhật được user local	Kiểm tra Hermes DB
+session_create_failed	Không tạo được Hermes token/session	Kiểm tra signing key/session store
+8. Bảo mật cần lưu ý
+8.1. Seed token
+
+Seed token nên có các đặc điểm:
+
+Thời gian sống ngắn.
+Chỉ dùng cho mục đích cross-app login.
+Có thể revoke.
+Không chứa dữ liệu nhạy cảm dạng plain text.
+Không nên lưu lâu trong frontend storage.
+8.2. Hermes App
+
+Hermes App nên:
+
+Chỉ lấy seed token từ App Mesh SDK.
+Không tự verify seed token.
+Không gọi trực tiếp API V-ID nếu luồng yêu cầu backend trung gian.
+Xóa seed token hoặc session local khi logout.
+8.3. Hermes Backend
+
+Hermes Backend nên:
+
+Validate input token.
+Gọi V-ID qua HTTPS.
+Log lỗi nhưng không log raw seed token.
+Tạo user theo userId từ V-ID, không dựa vào email/phone làm khóa chính duy nhất.
+Tạo session/token nội bộ sau khi V-ID xác thực thành công.
+Có rate limit cho API /auth/cross-app-login.
+8.4. V-ID
+
+V-ID cần kiểm tra:
+
+Seed token hợp lệ.
+Seed token chưa hết hạn.
+Seed token thuộc phiên đăng nhập đáng tin cậy.
+Hermes Backend có quyền gọi API seed userinfo.
+Seed token chưa bị revoke.
+9. Pseudo code backend
+// POST /auth/cross-app-login
+async function crossAppLogin(req, res) {
+  const { token: seedToken } = req.body;
+
+  if (!seedToken) {
+    return res.status(400).json({
+      success: false,
+      error: "missing_seed_token"
+    });
+  }
+
+  const userInfo = await vidClient.getSeedUserInfo({
+    seedToken,
+    accessToken: HERMES_ACCESS_TOKEN
+  });
+
+  if (!userInfo?.userId) {
+    return res.status(401).json({
+      success: false,
+      error: "invalid_seed_token"
+    });
+  }
+
+  let user = await userRepository.findByVidUserId(userInfo.userId);
+
+  if (!user) {
+    user = await userRepository.create({
+      vidUserId: userInfo.userId,
+      name: userInfo.name,
+      phone: userInfo.phone,
+      email: userInfo.email,
+      avatar: userInfo.avatar
+    });
+  } else {
+    user = await userRepository.updateProfile(user.id, {
+      name: userInfo.name,
+      phone: userInfo.phone,
+      email: userInfo.email,
+      avatar: userInfo.avatar
+    });
+  }
+
+  const hermesToken = await tokenService.createToken({
+    userId: user.id,
+    vidUserId: userInfo.userId
+  });
+
+  return res.json({
+    success: true,
+    accessToken: hermesToken.accessToken,
+    refreshToken: hermesToken.refreshToken,
+    user: {
+      id: user.id,
+      vidUserId: userInfo.userId,
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      avatar: user.avatar
+    }
+  });
+}
+10. Pseudo code Hermes App
+async function loginByCrossApp() {
+  const seedToken = await AppMeshSDK.getSeedToken();
+
+  if (!seedToken) {
+    throw new Error("missing_seed_token");
+  }
+
+  const response = await api.post("/auth/cross-app-login", {
+    token: seedToken
+  });
+
+  saveHermesSession({
+    accessToken: response.accessToken,
+    refreshToken: response.refreshToken,
+    user: response.user
+  });
+
+  navigateToHome();
+}
+11. Khuyến nghị triển khai
+
+Nên thiết kế theo hướng:
+
+V-App cấp seed token
+→ App Mesh SDK lưu seed token
+→ Hermes App lấy seed token
+→ Hermes Backend đổi seed token qua V-ID
+→ Hermes Backend tạo Hermes session/token
+→ Hermes App đăng nhập thành công
+
+Backend Hermes nên là nơi duy nhất:
+
+Gọi V-ID để xác thực seed token.
+Mapping user V-ID sang user Hermes.
+Tạo Hermes token hoặc local session.
+Quản lý refresh token/session của Hermes.
+
+Cách này giúp Hermes App không phụ thuộc trực tiếp vào logic xác thực của V-ID và giảm rủi ro lộ token phía client.

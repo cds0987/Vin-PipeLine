@@ -1,0 +1,67 @@
+Tổng quan
+V-App Mesh là bộ SDK giúp các ứng dụng trong hệ sinh thái VSF có thể dễ dàng chia sẻ dữ liệu và các tính năng dùng chung một cách an toàn và bảo mật.
+
+Mục tiêu
+Cung cấp cơ chế chia sẻ dữ liệu và tính năng giữa các ứng dụng trong hệ sinh thái VSF một cách bảo mật, nhanh chóng.
+
+Các tính năng chính:
+
+Chia sẻ seed_token: Giúp thực hiện đăng nhập một lần (SSO) giữa các ứng dụng (V-App, Hermes, etc.).
+Lưu trữ dùng chung: Chia sẻ các dữ liệu nhạy cảm an toàn giữa các App thông qua Shared Storage.
+Cài đặt
+Hướng dẫn tích hợp SDK vsf_app_mesh vào dự án Flutter.
+
+1. Thêm Dependency
+Thêm vào pubspec.yaml:
+
+dependencies:
+  vsf_app_mesh:
+    hosted: https://jfrog.vinsmartfuture.tech/artifactory/api/pub/vsf-ptnt-pub-local
+    version: 1.1.0
+
+
+2. Cấu hình iOS
+Để chia sẻ dữ liệu an toàn trên iOS, bạn cần cấu hình Keychain Sharing.
+
+Mở Xcode, chọn target của ứng dụng.
+Vào tab Signing & Capabilities.
+Thêm capability Keychain Sharing.
+Thêm Keychain Access Group tương ứng với môi trường:
+Môi trường	Access Group ID
+DEV	vn.vsf.app.dev.auth
+SIT	vn.vsf.app.sit.auth
+UAT	vn.vsf.app.uat.auth
+PROD	vn.vsf.app.prod.auth
+info
+Lưu ý về Team ID:
+
+Các môi trường Non-Prod (DEV, SIT, UAT) sử dụng Team ID: 2L644Y8ZFY.
+Môi trường Production sử dụng Team ID: S7A2944694.
+Các ứng dụng trong cùng một môi trường bắt buộc phải cùng một Team ID thì mới có thể chia sẻ dữ liệu qua Keychain.
+
+3. Cấu hình Android
+Không cần cấu hình thủ công.
+
+SDK tự động:
+
+Merge các quyền cần thiết vào AndroidManifest.xml.
+Sử dụng cơ chế AccountManager và xác thực chữ ký số (Signature Verification) để đảm bảo chỉ các ứng dụng được build từ cùng một key store mới có thể truy cập dữ liệu.
+info
+Lưu ý về SignKey của App: Các ứng dụng bắt buộc phải sử dụng chung một KeyStore để ký. SDK sẽ thực hiện xác thực chéo chứng chỉ giữa các ứng dụng; nếu chữ ký không khớp, quyền truy cập dữ liệu sẽ bị từ chối.
+
+4. Khởi tạo SDK
+Khởi tạo AppMesh ngay khi ứng dụng bắt đầu.
+
+import 'package:vsf_app_mesh/vsf_app_mesh.dart';
+
+await AppMesh.initialize(
+  config: const AppMeshConfig(
+    // Chọn flavor phù hợp với môi trường build
+    flavor: AppMeshFlavor.sit, 
+  ),
+);
+
+Previous
+App Mesh SDK
+Next
+Tính nă

@@ -1,0 +1,253 @@
+Luồng Authorization Code
+Tổng quan
+Authorization Code Flow là luồng OAuth 2.0 được dùng phổ biến cho ứng dụng phía server. Luồng này dành cho confidential client — ứng dụng có thể lưu trữ an toàn client secret. Luồng này sẽ không đưa secret ra trình duyệt, phù hợp cho SSO khi người dùng đăng nhập một lần và truy cập nhiều ứng dụng.
+
+Nên dùng PKCE
+Luồng Authorization Code thuần phụ thuộc vào client_secret khi đổi code lấy token. PKCE (Proof Key for Code Exchange) ràng buộc authorization code với code_verifier do client/backend tạo, giảm rủi ro khi code bị đánh chặn. Vui lòng tham khảo Luồng Authorization Code PKCE với Backend
+
+Khi nào sử dụng
+Triển khai SSO: Cho phép người dùng đăng nhập một lần và truy cập nhiều ứng dụng
+Confidential client: Ứng dụng web phía server (Node.js, Java, Python, PHP, ...)
+Ứng dụng có thể lưu trữ và dùng client_secret một cách an toàn
+SSO trong doanh nghiệp: Khi tích hợp với identity provider có sẵn hoặc xây hệ thống xác thực tập trung
+Sơ đồ luồng
+V-ID
+Backend ứng dụng
+Client (Frontend)
+V-ID
+Backend ứng dụng
+Client (Frontend)
+5b. Bỏ qua đăng nhập — dùng phiên SSO hiện có
+alt
+[Chưa xác thực (Lần đăng nhập SSO đầu tiên)]
+[Đã xác thực (Đã có phiên SSO)]
+(Tùy chọn) Backend có thể thực hiện thêm:
+13. Tạo token/session riêng cho ứng dụng (JWT, session)
+Người dùng
+1. Bắt đầu đăng nhập / Truy cập tài nguyên bảo vệ
+2. Yêu cầu đăng nhập (hoặc redirect user tới backend)
+3. Chuyển hướng đến Authorization Server của SSO
+4. Điều hướng đến Authorization Endpoint
+5a. Hiển thị trang đăng nhập
+6a. Nhập thông tin đăng nhập & đồng ý
+7. Chuyển hướng về Callback kèm Authorization Code
+8. Theo redirect về callback (code + state)
+9. Đổi code lấy token (kèm client_secret)
+10. Trả về Access Token + ID Token + Refresh Token
+11. Lấy UserInfo (dùng access token)
+12. Trả về thông tin user (name, avatar, ...)
+14. Redirect về Client với session/token — Đăng nhập thành công
+Người dùng
+Ứng dụng Demo
+Trải nghiệm luồng Authorization Code cho SSO — bao gồm xử lý token phía server:
+
+Đi qua toàn bộ bước đăng nhập OAuth2/OIDC SSO, gồm consent và callback
+Xem server dùng access token để gọi API và lấy thông tin user
+Thử nghiệm các tham số và quan sát việc trao đổi token
+Kiểm tra hành vi phiên SSO: Các lần đăng nhập sau có thể bỏ qua bước nhập mật khẩu
+URL Demo: https://sso-demo.dev.vsf.services
+
+Demo minh họa cả bước phía client và phía server trong ngữ cảnh SSO, giúp bạn hiểu cách lấy access token và dùng nó để gọi API userinfo để đọc thông tin người dùng.
+
+info
+Demo dùng cho mục đích thử nghiệm. Để triển khai SSO production, hãy đăng ký và dùng OAuth2 credentials của bạn.
+
+Hướng dẫn tích hợp SSO
+Điều kiện cần có
+Cấu hình SSO Provider: Đăng ký ứng dụng và lấy:
+
+client_id
+client_secret
+Cấu hình redirect URI cho các ứng dụng
+Cấu hình endpoint SSO:
+
+Authorization endpoint: https://auth.dev.vsf.services/oauth2/auth
+Token endpoint: https://api.dev.vsf.services/oauth2/token
+Lưu ý: ở trên là cấu hình dành cho môi trường dev, vui lòng thay đổi cấu hình theo các môi trường tương ứng.
+
+Luồng từng bước
+Bước 1: Yêu cầu ủy quyền (Authorization Request)
+Client chuyển hướng người dùng đến authorization endpoint của authorization server. Nếu người dùng đã có phiên SSO đang hoạt động, họ sẽ được chuyển hướng trở lại mà không cần đăng nhập lại.
+
+Tham số request:
+
+Tham số	Bắt buộc	Mô tả
+response_type	Có	Phải là code cho luồng authorization code
+client_id	Có	Định danh client được cấp khi đăng ký
+redirect_uri	Có	URI để chuyển hướng người dùng sau khi ủy quyền. Phải khớp chính xác với một trong các redirect URI đã đăng ký
+scope	Không	Danh sách scope được yêu cầu, phân cách bằng dấu cách (vd: openid profile email phone)
+state	Nên có	Giá trị bất kỳ dùng để giữ state giữa request và callback. Cần cho bảo vệ CSRF
+prompt	Không	Dùng none để kiểm tra phiên SSO mà không hiện form đăng nhập; dùng login để bắt buộc đăng nhập lại
+Ví dụ request SSO:
+
+GET {AuthorizationEndpoint}?
+  response_type=code&
+  client_id=your_client_id&
+  redirect_uri=https://yourapp.com/callback&
+  scope=openid%20offline%20profile%20phone&
+  state=xyzABC123&
+  prompt=none
+Host: auth.example.com
+
+Bước 2: Kiểm tra phiên SSO & Xác thực người dùng
+Authorization server sẽ:
+
+Kiểm tra phiên SSO hiện có (nếu dùng prompt=none)
+Xác thực người dùng (nếu chưa đăng nhập hoặc nếu prompt=login)
+Hiển thị màn hình consent (nếu cần và chưa được cấp trước đó)
+Thu thập sự đồng ý của người dùng
+Hành vi SSO:
+
+Đã có phiên: Người dùng được chuyển hướng ngay về với authorization code
+Chưa có phiên: Hiển thị trang đăng nhập, người dùng thực hiện xác thực
+Phiên hết hạn: Tùy cấu hình, người dùng có thể phải đăng nhập lại
+Bước 3: Response ủy quyền (Authorization Response)
+Authorization server chuyển hướng về client kèm authorization code.
+
+Response thành công:
+
+HTTP/1.1 302 Found
+Location: https://yourapp.com/callback?
+  code=AUTH_CODE_HERE&
+  state=xyzABC123
+
+Response lỗi:
+
+HTTP/1.1 302 Found
+Location: https://yourapp.com/callback?
+  error=access_denied&
+  error_description=The+user+denied+the+request&
+  state=xyzABC123
+
+Mã lỗi:
+
+Mã lỗi	Mô tả
+invalid_request	Thiếu hoặc sai tham số
+unauthorized_client	Client không được phép dùng luồng này
+access_denied	Người dùng từ chối yêu cầu ủy quyền
+unsupported_response_type	Server không hỗ trợ response type này
+invalid_scope	Scope yêu cầu không hợp lệ hoặc không biết
+server_error	Lỗi nội bộ server
+temporarily_unavailable	Server tạm thời không khả dụng
+Bước 4: Đổi code lấy token (Token Exchange)
+caution
+Bước này phải thực hiện trên server của bạn, không phải từ trình duyệt. Không bao giờ đưa client credentials vào code chạy ở client.
+
+Client (backend/server của bạn) đổi authorization code lấy token bằng cách gửi POST đến token endpoint.
+
+Request:
+
+curl '<TokenEndpoint>' \
+  --data-raw 'grant_type=authorization_code&code=<code>&client_id=<client_id>&redirect_uri=<redirect_uri>&client_secret=<client_secret>'
+
+
+Tham số request:
+
+Tham số	Bắt buộc	Mô tả
+grant_type	Có	Phải là authorization_code
+code	Có	Authorization code nhận được
+redirect_uri	Có	Phải khớp với redirect_uri ban đầu
+client_id	Có	Định danh client
+client_secret	Có	Client secret
+Response thành công:
+
+{
+  "access_token": "[REDACTED]",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "8xLOxBtZp8",
+  "id_token": "[REDACTED]",
+  "scope": "openid profile email"
+}
+
+Các trường response:
+
+Trường	Mô tả
+access_token	JWT dùng để gọi tài nguyên bảo vệ
+token_type	Loại token (thường là "Bearer")
+expires_in	Thời gian sống của token (giây)
+refresh_token	Token dùng để lấy access token mới
+id_token	JWT chứa thông tin định danh user (OIDC)
+scope	Các scope được cấp
+Response lỗi:
+
+{
+  "error": "invalid_grant",
+  "error_description": "The provided authorization code is invalid or expired"
+}
+
+Mã lỗi token:
+
+Mã lỗi	Mô tả
+invalid_request	Thiếu tham số
+invalid_client	Xác thực client thất bại
+invalid_grant	Authorization code không hợp lệ hoặc hết hạn
+unauthorized_client	Client không được phép dùng grant type này
+unsupported_grant_type	Grant type không được hỗ trợ
+Bước 5: Refresh token
+Khi access token hết hạn, dùng refresh token để lấy access token mới (và có thể nhận refresh token mới tùy cấu hình). Gọi cùng token endpoint như Bước 4.
+
+caution
+Bước này phải thực hiện trên server của bạn, không phải từ trình duyệt. Không bao giờ đưa client credentials vào code chạy ở client.
+
+Client (backend/server của bạn) gửi POST đến token endpoint với grant_type=refresh_token và refresh token đã lưu.
+
+Request:
+
+curl '<TokenEndpoint>' \
+  --data-raw 'grant_type=refresh_token&refresh_token=<refresh_token>&client_id=<client_id>&client_secret=<client_secret>&scope=openid%20profile%20email'
+
+
+Tham số request:
+
+Tham số	Bắt buộc	Mô tả
+grant_type	Có	Phải là refresh_token
+refresh_token	Có	Refresh token nhận được từ Bước 4 (hoặc từ lần refresh trước)
+client_id	Có	Định danh client
+client_secret	Có	Client secret
+scope	Không	Scope yêu cầu (nếu có; không được vượt quá scope đã cấp ban đầu)
+Response thành công:
+
+{
+  "access_token": "[REDACTED]",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "new_refresh_token_here",
+  "scope": "openid profile email"
+}
+
+Các trường response:
+
+Trường	Mô tả
+access_token	JWT mới dùng để gọi tài nguyên bảo vệ
+token_type	Loại token (thường là "Bearer")
+expires_in	Thời gian sống của access token mới (giây)
+refresh_token	Refresh token mới (một số server cấp mới mỗi lần; có thể giống cũ)
+scope	Các scope được cấp
+Response lỗi:
+
+{
+  "error": "invalid_grant",
+  "error_description": "The refresh token is invalid or expired"
+}
+
+Mã lỗi token:
+
+Mã lỗi	Mô tả
+invalid_request	Thiếu tham số
+invalid_client	Xác thực client thất bại
+invalid_grant	Refresh token không hợp lệ hoặc đã hết hạn
+unauthorized_client	Client không được phép dùng grant type này
+unsupported_grant_type	Grant type không được hỗ trợ
+
+
+
+
+
+
+
+🧩 Mô tả sơ đồ luồng Authorization Code
+Sơ đồ thể hiện quá trình xác thực người dùng giữa Client (ứng dụng), Authorization Server và Resource Server thông qua cơ chế Single Sign-On (SSO) theo chuẩn Authorization Code.
+Ban đầu, khi người dùng truy cập vào ứng dụng, Client sẽ chuyển hướng (redirect) người dùng đến Authorization Server để thực hiện đăng nhập. Sau khi xác thực thành công, Authorization Server trả về một authorization code thông qua URL redirect.
+Client sau đó sử dụng authorization code này để gửi yêu cầu đến Authorization Server nhằm đổi lấy access token (và có thể kèm refresh token). Khi đã có access token, ứng dụng có thể dùng token này để gọi đến Resource Server và truy cập các tài nguyên được bảo vệ thay mặt người dùng.
+Toàn bộ quá trình đảm bảo tính bảo mật, vì access token không được trả trực tiếp qua trình duyệt mà được trao đổi thông qua backend của Client.

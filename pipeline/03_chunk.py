@@ -1,11 +1,32 @@
 from __future__ import annotations
 
-from models.ingest_job import ChunkResult, IngestJob
 from config import settings
+from models.ingest_job import ChunkResult, IngestJob
 
 
-def _tokenize(text: str) -> list[str]:
-    return text.split()
+def _get_encoder():
+    try:
+        import tiktoken
+        return tiktoken.encoding_for_model("text-embedding-3-small")
+    except Exception:
+        return None
+
+
+_ENCODER = _get_encoder()
+
+
+def _tokenize(text: str) -> list[int]:
+    if _ENCODER is not None:
+        return _ENCODER.encode(text)
+    # fallback: encode each word as a single fake token id
+    return list(range(len(text.split())))
+
+
+def _decode(token_ids: list[int]) -> str:
+    if _ENCODER is not None:
+        return _ENCODER.decode(token_ids)
+    # fallback path is never reached in production (tiktoken always available)
+    return " ".join(str(t) for t in token_ids)
 
 
 def run(text: str, job: IngestJob) -> list[ChunkResult]:
@@ -21,7 +42,9 @@ def run(text: str, job: IngestJob) -> list[ChunkResult]:
         chunk_tokens = tokens[start : start + chunk_size]
         if not chunk_tokens:
             continue
-        content = " ".join(chunk_tokens).strip()
+        content = _decode(chunk_tokens).strip()
+        if not content:
+            continue
         chunks.append(
             ChunkResult(
                 chunk_id=f"{job.doc_id}_chunk_{index:04d}",

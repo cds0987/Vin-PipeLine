@@ -30,12 +30,25 @@ def run(
         text = parse.run(job, ai)
         text = clean.run(text)
         chunks = chunk.run(text, job)
+        if not chunks:
+            raise ValueError(f"doc_id={job.doc_id}: parse produced empty text — possible scan PDF without OCR fallback")
         chunks = embed.run(chunks, ai)
-        stats = index.run(chunks, job, vectors, metadata)
+        duration = round(time.perf_counter() - started_at, 3)
+        stats = index.run(chunks, job, vectors, metadata,
+                          embedding_model=settings.EMBED_MODEL,
+                          duration_seconds=duration)
         stats["embedding_model"] = settings.EMBED_MODEL
-        stats["duration_seconds"] = round(time.perf_counter() - started_at, 3)
+        stats["duration_seconds"] = duration
         notify_indexing_done(job.doc_id, stats["chunk_count"])
         return stats
     except Exception as exc:
+        duration = round(time.perf_counter() - started_at, 3)
+        metadata.record_job(
+            doc_id=job.doc_id,
+            status="failed",
+            duration_seconds=duration,
+            error_message=str(exc),
+        )
+        metadata.update_status(job.doc_id, "failed")
         notify_indexing_failed(job.doc_id, str(exc))
         raise
