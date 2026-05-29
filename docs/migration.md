@@ -143,10 +143,13 @@ TOPIC_DLQ        = "DocumentUploaded.DLQ"
 # Metadata DB (PostgreSQL)
 DB_URL           = os.getenv("DATABASE_URL", "postgresql://rag:rag@postgres:5432/ragdb")
 
-# Vector DB (Chroma local / Qdrant cloud)
-CHROMA_HOST      = os.getenv("CHROMA_HOST", "chroma")
-CHROMA_PORT      = int(os.getenv("CHROMA_PORT", "8000"))
-COLLECTION_NAME  = os.getenv("CHROMA_COLLECTION", "documents")
+# Vector DB (Qdrant — local Docker hoặc Qdrant Cloud)
+VECTOR_STORE     = os.getenv("VECTOR_STORE",    "qdrant")
+QDRANT_HOST      = os.getenv("QDRANT_HOST",     "qdrant")
+QDRANT_PORT      = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_URL       = os.getenv("QDRANT_URL")       # Cloud override
+QDRANT_API_KEY   = os.getenv("QDRANT_API_KEY")
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "documents")
 
 # Embedding
 EMBEDDING_MODEL  = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -280,13 +283,13 @@ uvicorn[standard]==0.30.1
 pydantic==2.7.0
 
 # Document parsing
-pypdf2==3.0.1
+pypdf>=4.0.0
 python-docx==1.1.0
 pytesseract==0.3.10        # OCR fallback
 
 # Embedding & Vector DB
 openai==1.30.0
-chromadb==0.5.0
+qdrant-client>=1.9.0
 
 # Storage & messaging
 boto3==1.34.131
@@ -316,7 +319,7 @@ Phase 1 — Pipeline core (tuần 1)
   Day 4:  pipeline/01_parse.py (PDF/DOCX/TXT) + pipeline/02_clean.py (normalize)
   Day 5:  pipeline/03_chunk.py (sliding window 300–800 tokens, overlap)
   Day 6:  pipeline/04_embed.py (dùng AIProvider — test với Ollama local, không cần cloud)
-  Day 7:  docker-compose up (Chroma + PostgreSQL) → pipeline/05_index.py
+  Day 7:  docker-compose up (Qdrant + PostgreSQL) → pipeline/05_index.py
   Day 8:  pipeline/run.py + FileAdapter → test end-to-end 20 file thật
           Deliverable ✅: pipeline chạy hoàn chỉnh, Vector DB có data thật
 
@@ -336,7 +339,7 @@ Phase 3 — Retrieval API (tuần 3)
 
 Phase 4 — Production ready
   Day 17: infra/terraform/ (S3 + MSK + RDS + Qdrant Cloud)
-  Day 18: migrate Chroma → Qdrant (thêm QdrantStore adapter, đổi env var)
+  Day 18: ✅ QdrantStore đã là vector store mặc định (local + cloud, đổi env var)
   Day 19: Dead letter replay script + monitor + alert DLQ
   Day 20: README + push GitHub
 ```

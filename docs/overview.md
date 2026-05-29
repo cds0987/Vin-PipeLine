@@ -110,6 +110,14 @@ class OpenAIProvider:
 | vLLM server | `http://gpu-host:8000/v1` | `token-...` | model name trên server |
 | Azure OpenAI | `https://<resource>.openai.azure.com/` | `...` | deployment name |
 
+### Đổi Qdrant server — chỉ đổi config, không đổi code
+
+| Môi trường | Cấu hình |
+|---|---|
+| Local Docker | `QDRANT_HOST=qdrant`, `QDRANT_PORT=6333` |
+| Qdrant Cloud | `QDRANT_URL=https://<id>.cloud.qdrant.io`, `QDRANT_API_KEY=...` |
+| Self-hosted | `QDRANT_HOST=<ip>`, `QDRANT_PORT=6333` |
+
 ---
 
 ## Store Adapters — đổi DB không đổi pipeline
@@ -128,9 +136,10 @@ class MetadataStore(Protocol):
     def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None: ...
 
 # Implementations — thêm class mới khi SA đổi stack, pipeline không đổi
-class ChromaStore(VectorStore): ...       # dev default
-class QdrantStore(VectorStore): ...       # production option
-class PostgresMetadataStore(MetadataStore): ...
+class QdrantStore(VectorStore): ...        # default (local + cloud)
+class InMemoryVectorStore(VectorStore): ...# test / CI / fallback
+class SQLMetadataStore(MetadataStore): ...
+class InMemoryMetadataStore(MetadataStore): ... # test / CI
 ```
 
 ---
@@ -152,9 +161,12 @@ CHUNK_SIZE     = int(os.getenv("CHUNK_SIZE",    "512"))
 CHUNK_OVERLAP  = int(os.getenv("CHUNK_OVERLAP", "64"))
 
 # Vector DB
-VECTOR_STORE   = os.getenv("VECTOR_STORE",  "chroma")
-CHROMA_HOST    = os.getenv("CHROMA_HOST",   "chroma")
-CHROMA_PORT    = int(os.getenv("CHROMA_PORT", "8000"))
+VECTOR_STORE    = os.getenv("VECTOR_STORE",    "qdrant")
+QDRANT_HOST     = os.getenv("QDRANT_HOST",     "qdrant")
+QDRANT_PORT     = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_URL      = os.getenv("QDRANT_URL")       # Qdrant Cloud override
+QDRANT_API_KEY  = os.getenv("QDRANT_API_KEY")   # Qdrant Cloud auth
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "documents")
 
 # Metadata DB
 DB_URL         = os.getenv("DATABASE_URL",  "postgresql://rag:rag@postgres:5432/ragdb")
@@ -364,7 +376,7 @@ class ChunkResult(BaseModel):    # Output Port
 | Nhu cầu | Thay đổi |
 |---|---|
 | Đổi AI model / server | 1 dòng env var |
-| Đổi Vector DB (Qdrant, Milvus) | Thêm 1 class adapter |
+| Đổi Vector DB (Milvus, Weaviate) | Thêm 1 class adapter, đổi env var |
 | Thêm loại file mới | Thêm parser trong `01_parse.py` |
 | Build AI agent xử lý data | Thêm step trong pipeline, extend AIProvider |
 | Đổi message queue | Thêm Adapter mới, Core không đổi |

@@ -14,7 +14,7 @@ Rủi ro nếu không có mindset đúng:
 |------------|----------------------|
 | BE deliver Kafka schema khác mock | Sửa nhiều chỗ trong pipeline |
 | SA đổi message queue (Kafka → RabbitMQ) | Rewrite consumer |
-| SA đổi Vector DB (Chroma → Qdrant) | Rewrite toàn bộ write logic |
+| SA đổi Vector DB (Qdrant → Milvus) | Chỉ viết thêm 1 adapter class |
 | Permission model thay đổi | Rewrite cả permission handling |
 | BE đổi field name trong event | Pipeline crash, không replay được |
 
@@ -146,12 +146,15 @@ class VectorStore(ABC):
     def search(self, query_vec: List[float], top_k: int, filters: dict) -> List[ChunkResult]: ...
     def delete(self, doc_id: str) -> None: ...
 
-# Dev
-class ChromaStore(VectorStore): ...
-
-# Production — chỉ viết thêm class này, không đổi gì khác
+# Default (local Docker + Qdrant Cloud)
 class QdrantStore(VectorStore): ...
+
+# Test / CI / fallback
+class InMemoryVectorStore(VectorStore): ...
+
+# Đổi stack — chỉ viết thêm class này, không đổi gì khác
 class MilvusStore(VectorStore): ...
+class WeaviateStore(VectorStore): ...
 ```
 
 ### MetadataStore interface
@@ -172,7 +175,7 @@ class MetadataStore(ABC):
 ```python
 class IngestionPipeline:
     def __init__(self, vector_store: VectorStore, metadata_store: MetadataStore):
-        # Inject store qua interface — không biết đang dùng Chroma hay Qdrant
+        # Inject store qua interface — không biết đang dùng Qdrant hay store nào khác
         self.vector_store = vector_store
         self.metadata_store = metadata_store
 

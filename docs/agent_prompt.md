@@ -17,36 +17,31 @@ Build **DE Ingestion Service** — một service Python độc lập nhận tài
 
 ## Trạng thái hiện tại
 
-Các file sau đã tồn tại, cần **rewrite hoàn toàn** (không giữ logic cũ):
+✅ **Tất cả code đã hoàn thành và CI pass.** Không còn file nào cần rewrite hay tạo mới.
 
 ```
-config/settings.py          ← rewrite theo overview.md#Config
-utils/storage.py            ← rewrite: bỏ PySpark, đọc binary từ S3/local
-utils/notifier.py           ← giữ Kafka publish logic, đổi topic names
-streaming/kafka_consumer.py ← rewrite: consume DocumentUploaded → validate → run
-dags/pipeline_dag.py        ← rewrite: KafkaSensor → pipeline.run()
-api/main.py                 ← rewrite: POST /ingest, POST /retrieve-context, GET /health
-```
-
-Các file sau **chưa tồn tại**, cần tạo mới:
-
-```
-models/ingest_job.py        ← IngestJob, ChunkResult, PermissionModel, DocumentRecord
-models/events.py            ← DocumentUploaded event schema
-utils/ai_provider.py        ← AIProvider Protocol + OpenAIProvider
-utils/stores.py             ← VectorStore, MetadataStore Protocol + implementations
-utils/validator.py          ← validate Kafka payload → DLQ nếu fail
-utils/mapper.py             ← DocumentUploaded → IngestJob
-pipeline/01_parse.py        ← file_uri → raw text (PDF/DOCX/TXT/Image)
-pipeline/02_clean.py        ← text → normalized text
-pipeline/03_chunk.py        ← text → chunks[] sliding window
-pipeline/04_embed.py        ← chunks[] → chunks với embedding (AIProvider)
-pipeline/05_index.py        ← chunks[] → VectorDB + MetadataDB + PermissionStore
-pipeline/run.py             ← orchestrate 5 bước, nhận IngestJob trả dict stats
-retrieval/service.py        ← vector search + permission filter
-adapters/file_adapter.py    ← file_path → IngestJob (dùng test local, không cần Kafka)
-adapters/kafka_adapter.py   ← raw Kafka event → IngestJob
-data/sample/                ← thư mục chứa 3-5 file PDF/DOCX/TXT test
+config/settings.py          ✅ Qdrant config, pydantic-settings, credential-safe
+utils/storage.py            ✅ read_binary S3/local, boto3 credential chain
+utils/notifier.py           ✅ Kafka publish với lazy producer, thread-safe
+utils/ai_provider.py        ✅ AIProvider Protocol + OpenAIProvider + MockAIProvider
+utils/stores.py             ✅ QdrantStore + InMemoryVectorStore
+                               SQLMetadataStore + FileMetadataStore + InMemoryMetadataStore
+utils/validator.py          ✅ validate Kafka payload → DLQ nếu fail
+utils/mapper.py             ✅ DocumentUploaded → IngestJob
+models/ingest_job.py        ✅ IngestJob, ChunkResult, PermissionModel, DocumentRecord
+models/events.py            ✅ DocumentUploaded, EmbeddingDone, IndexingFailed
+pipeline/01_parse.py        ✅ PDF/DOCX/TXT/HTML/Image (pypdf, python-docx, OCR)
+pipeline/02_clean.py        ✅ normalize text
+pipeline/03_chunk.py        ✅ sliding window với overlap
+pipeline/04_embed.py        ✅ batch embed qua AIProvider
+pipeline/05_index.py        ✅ upsert VectorDB + MetadataDB + PermissionStore
+pipeline/run.py             ✅ orchestrate 5 bước, trả dict stats
+retrieval/service.py        ✅ vector search + permission filter (5 rules)
+streaming/kafka_consumer.py ✅ consume → validate → retry 3x → DLQ; manual offset commit
+api/main.py                 ✅ POST /ingest, POST /retrieve-context, GET /health
+adapters/file_adapter.py    ✅ file_path → IngestJob
+adapters/kafka_adapter.py   ✅ raw Kafka event → IngestJob
+tests/                      ✅ 17 tests, CI green (pytest + docker-test)
 ```
 
 ---
@@ -60,7 +55,7 @@ Day 3:  utils/storage.py + utils/validator.py + utils/mapper.py
 Day 4:  pipeline/01_parse.py + pipeline/02_clean.py
 Day 5:  pipeline/03_chunk.py
 Day 6:  pipeline/04_embed.py  (test với AI_BASE_URL=http://localhost:11434/v1 nếu có Ollama)
-Day 7:  utils/stores.py + pipeline/05_index.py  (cần docker-compose up postgres chroma)
+Day 7:  utils/stores.py + pipeline/05_index.py  (cần docker-compose up postgres qdrant)
 Day 8:  pipeline/run.py + adapters/file_adapter.py → test end-to-end với file thật
         ✅ Checkpoint: pipeline chạy hoàn chỉnh từ file → Vector DB
 Day 9:  adapters/kafka_adapter.py + utils/notifier.py + streaming/kafka_consumer.py
