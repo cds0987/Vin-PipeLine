@@ -73,4 +73,42 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run Qdrant integration tests
-        run: pytest -m integration -v
+        run: pytest -m qdrant -v
+
+  minio-integration:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      AI_PROVIDER: mock
+      VECTOR_STORE: memory
+      METADATA_STORE: memory
+      USE_S3: "false"
+      MINIO_TEST_ENDPOINT: http://localhost:9000
+      MINIO_TEST_BUCKET: rag-pipeline-local
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start MinIO
+        run: |
+          docker run -d \
+            --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          until curl -sf http://localhost:9000/minio/health/live; do sleep 1; done
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run MinIO integration tests
+        run: pytest -m minio -v

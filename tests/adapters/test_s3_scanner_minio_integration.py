@@ -10,7 +10,7 @@ import pytest
 from adapters.s3_adapter import S3Scanner
 from utils.stores import InMemoryMetadataStore
 
-pytestmark = pytest.mark.integration
+pytestmark = pytest.mark.minio
 
 
 def _minio_endpoint() -> str:

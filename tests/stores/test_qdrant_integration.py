@@ -10,7 +10,7 @@ import pytest
 from config import settings
 from models.ingest_job import ChunkResult
 
-pytestmark = pytest.mark.integration
+pytestmark = pytest.mark.qdrant
 
 
 def _make_embedding(seed: int = 0) -> list[float]:
