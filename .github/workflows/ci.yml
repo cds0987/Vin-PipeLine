@@ -143,6 +143,9 @@ jobs:
           docker push $IMAGE:${{ github.sha }}
           docker push $IMAGE:latest
 
+      - name: Install GKE auth plugin
+        run: gcloud components install gke-gcloud-auth-plugin --quiet
+
       - name: Get GKE credentials
         run: |
           gcloud container clusters get-credentials vin-pipeline \
