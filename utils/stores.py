@@ -40,9 +40,6 @@ class MetadataStore(Protocol):
     def get_by_file_paths(self, file_paths: list[str]) -> dict[str, DocumentRecord]: ...
 
     @abstractmethod
-    def upsert_chunks(self, chunks: list[ChunkResult]) -> None: ...
-
-    @abstractmethod
     def try_claim_ingest(self, job: IngestJob) -> bool: ...
 
     @abstractmethod
@@ -234,7 +231,7 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
 class SQLMetadataStore:
     def __init__(self, db_url: str | None = None) -> None:
         from sqlalchemy import create_engine
-        from db.schema import document_chunks, documents, ingestion_jobs, metadata as schema_metadata
+        from db.schema import documents, ingestion_jobs, metadata as schema_metadata
 
         self._engine = create_engine(
             db_url or settings.DB_URL,
@@ -245,7 +242,6 @@ class SQLMetadataStore:
         )
         self._metadata = schema_metadata
         self._documents = documents
-        self._chunks = document_chunks
         self._jobs = ingestion_jobs
         self._metadata.create_all(self._engine)
 
@@ -309,49 +305,6 @@ class SQLMetadataStore:
                 select(self._documents).where(self._documents.c.file_path.in_(file_paths))
             ).mappings().all()
         return {row["file_path"]: DocumentRecord(**dict(row)) for row in rows}
-
-    def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
-        from sqlalchemy import delete, select
-
-        if not chunks:
-            return
-        doc_id = chunks[0].doc_id
-        now = datetime.now(timezone.utc)
-        rows = [
-            {
-                "chunk_id": c.chunk_id,
-                "doc_id": c.doc_id,
-                "chunk_index": c.metadata.get("chunk_index", i),
-                "content": c.content,
-                "page_start": c.page_start,
-                "page_end": c.page_end,
-                "section": c.section,
-                "token_count": (c.metadata.get("token_end", 0) - c.metadata.get("token_start", 0)) or None,
-                "created_at": now,
-            }
-            for i, c in enumerate(chunks)
-        ]
-        with self._engine.begin() as conn:
-            existing_chunk_ids = {
-                row["chunk_id"]
-                for row in conn.execute(
-                    select(self._chunks.c.chunk_id).where(self._chunks.c.doc_id == doc_id)
-                ).mappings()
-            }
-            incoming_chunk_ids = {row["chunk_id"] for row in rows}
-            stale_chunk_ids = existing_chunk_ids - incoming_chunk_ids
-            if stale_chunk_ids:
-                conn.execute(
-                    delete(self._chunks).where(self._chunks.c.chunk_id.in_(stale_chunk_ids))
-                )
-            for row in rows:
-                updated = conn.execute(
-                    self._chunks.update()
-                    .where(self._chunks.c.chunk_id == row["chunk_id"])
-                    .values(**row)
-                )
-                if updated.rowcount == 0:
-                    conn.execute(self._chunks.insert().values(**row))
 
     def try_claim_ingest(self, job: IngestJob) -> bool:
         from sqlalchemy import select
@@ -473,9 +426,6 @@ class FileMetadataStore:
                 found[file_path] = DocumentRecord(**payload)
         return found
 
-    def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
-        pass
-
     def try_claim_ingest(self, job: IngestJob) -> bool:
         docs = self._read()
         payload = docs.get(job.doc_id)
@@ -576,9 +526,6 @@ class InMemoryMetadataStore:
     def get_by_file_paths(self, file_paths: list[str]) -> dict[str, DocumentRecord]:
         wanted = set(file_paths)
         return {doc.file_path: doc for doc in self._documents.values() if doc.file_path in wanted}
-
-    def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
-        pass
 
     def try_claim_ingest(self, job: IngestJob) -> bool:
         existing = self._documents.get(job.doc_id)

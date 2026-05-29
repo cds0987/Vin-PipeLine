@@ -42,20 +42,6 @@ documents = Table(
     Column("updated_at", DateTime, nullable=False),
 )
 
-document_chunks = Table(
-    "document_chunks",
-    metadata,
-    Column("chunk_id", String, primary_key=True),
-    Column("doc_id", String, nullable=False),
-    Column("chunk_index", Integer, nullable=False),
-    Column("content", Text, nullable=False),
-    Column("page_start", Integer),
-    Column("page_end", Integer),
-    Column("section", String),
-    Column("token_count", Integer),
-    Column("created_at", DateTime, nullable=False),
-)
-
 ingestion_jobs = Table(
     "ingestion_jobs",
     metadata,

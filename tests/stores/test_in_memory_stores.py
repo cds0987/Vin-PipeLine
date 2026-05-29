@@ -198,13 +198,6 @@ def test_get_by_file_path_returns_none_when_not_found():
     assert store.get_by_file_path("s3://bucket/missing.pdf") is None
 
 
-def test_upsert_chunks_does_not_raise():
-    from models.ingest_job import ChunkResult
-    store = InMemoryMetadataStore()
-    chunks = [ChunkResult(chunk_id="c1", doc_id="doc1", content="x")]
-    store.upsert_chunks(chunks)  # InMemory is a no-op but must not raise
-
-
 def test_record_job_does_not_raise():
     store = InMemoryMetadataStore()
     store.record_job(doc_id="doc1", status="indexed", chunk_count=5)  # no-op, must not raise

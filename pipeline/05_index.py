@@ -45,7 +45,6 @@ def run(
         chunk.metadata["s3_uri"] = job.file_uri
 
     vector_store.upsert(chunks)
-    metadata_store.upsert_chunks(chunks)
 
     processed_at = datetime.now(timezone.utc)
     metadata_store.update_status(job.doc_id, "indexed")

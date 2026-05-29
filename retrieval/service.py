@@ -32,8 +32,11 @@ class RetrievalService:
     def search(self, query: str, top_k: int = 5) -> list[dict]:
         query_vector = self._embed_query(query)
         threshold = settings.SEARCH_SCORE_THRESHOLD
-        chunks = self._vector_store.search(query_vector, top_k=top_k)
-        return [
+        # Fetch more candidates when threshold filtering is active so that
+        # callers always receive up to top_k results after filtering.
+        fetch_k = top_k * 3 if threshold > 0.0 else top_k
+        chunks = self._vector_store.search(query_vector, top_k=fetch_k)
+        results = [
             {
                 "chunk_id": chunk.chunk_id,
                 "content": chunk.content,
@@ -47,3 +50,4 @@ class RetrievalService:
             for chunk in chunks
             if threshold == 0.0 or (chunk.metadata.get("score") or 0.0) >= threshold
         ]
+        return results[:top_k]

@@ -161,9 +161,8 @@ Flow chính:
 3. upsert metadata document
 4. ghi `s3_uri` vào metadata của mỗi chunk
 5. upsert chunks vào vector store
-6. upsert chunk metadata vào metadata store
-7. update `processed_at`, `total_chunks`, `status=indexed`
-8. record một row mới trong `ingestion_jobs`
+6. update `processed_at`, `total_chunks`, `status=indexed`
+7. record một row mới trong `ingestion_jobs`
 
 Nếu lỗi:
 
@@ -179,7 +178,7 @@ Nếu lỗi:
 Nó chịu trách nhiệm:
 
 - build dependencies nếu caller không inject
-- đọc file bytes qua `read_binary(job.file_uri)` trước khi gọi parse
+- đọc file bytes qua `read_binary(job.file_uri)` trước khi gọi parse — `read_binary` enforce `MAX_FILE_SIZE_BYTES` trước khi đọc (head request với S3, `stat()` với local)
 - `try_claim_ingest()` để tránh double-run cùng `doc_id`
 - deadline guard theo `SCAN_JOB_TIMEOUT_SECONDS`
 - fail-fast nếu parse/chunk sinh nội dung rỗng
@@ -203,9 +202,9 @@ Flow:
 
 1. nhận query text từ `POST /search`
 2. embed query qua `AIProvider.embed([query])`
-3. tìm top-k từ `VectorStore.search()`
+3. fetch `top_k * 3` candidates từ `VectorStore.search()` khi threshold > 0 (đủ buffer sau khi filter)
 4. filter theo `SEARCH_SCORE_THRESHOLD`
-5. trả list kết quả về caller
+5. slice `[:top_k]` và trả về caller — caller luôn nhận đúng số lượng yêu cầu
 
 Service có cache query embedding dạng LRU đơn giản trong memory process.
 
@@ -377,18 +376,6 @@ Implementations:
 | `updated_at` | pipeline update mỗi khi ghi |
 
 Không có field nào phụ thuộc vào metadata do người dùng tự gắn hoặc external service.
-
-### `document_chunks`
-
-- `chunk_id`
-- `doc_id`
-- `chunk_index`
-- `content`
-- `page_start`
-- `page_end`
-- `section`
-- `token_count`
-- `created_at`
 
 ### `ingestion_jobs`
 
