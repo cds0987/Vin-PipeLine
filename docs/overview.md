@@ -112,11 +112,24 @@ class OpenAIProvider:
 
 ### Đổi Qdrant server — chỉ đổi config, không đổi code
 
-| Môi trường | Cấu hình |
+**Ưu tiên connection (logic tự động trong `QdrantStore`):**
+
+```
+QDRANT_URL có giá trị?
+    ├─ YES → QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY or None)
+    │         → Qdrant Cloud hoặc self-hosted có auth
+    └─ NO  → QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+              → Local Docker / self-hosted không cần auth
+```
+
+| Môi trường | Env vars cần set |
 |---|---|
-| Local Docker | `QDRANT_HOST=qdrant`, `QDRANT_PORT=6333` |
-| Qdrant Cloud | `QDRANT_URL=https://<id>.cloud.qdrant.io`, `QDRANT_API_KEY=...` |
+| Local Docker | `QDRANT_HOST=qdrant`, `QDRANT_PORT=6333` *(default, không cần set)* |
 | Self-hosted | `QDRANT_HOST=<ip>`, `QDRANT_PORT=6333` |
+| Qdrant Cloud (có API key) | `QDRANT_URL=https://<cluster>.cloud.qdrant.io`, `QDRANT_API_KEY=<key>` |
+| Qdrant Cloud (không auth) | `QDRANT_URL=https://<cluster>.cloud.qdrant.io` *(bỏ trống API key)* |
+
+> Xóa hoặc bỏ trống `QDRANT_URL` để switch về local — không cần đổi code.
 
 ---
 

@@ -87,21 +87,40 @@ Day 12: api/main.py
 
 ## Cách chạy test nhanh (không cần docker)
 
-```bash
-# 1. Đặt file test vào data/sample/
-# 2. Set env (Ollama local hoặc OpenAI)
-export AI_BASE_URL=http://localhost:11434/v1
-export AI_API_KEY=ollama
-export EMBED_MODEL=nomic-embed-text
-export USE_S3=false
+Tạo file `.env` (đã có sẵn trong `.gitignore` — không commit):
 
-# 3. Chạy pipeline với FileAdapter
+```env
+# AI Provider
+AI_PROVIDER=auto
+AI_API_KEY=sk-...            # hoặc bỏ trống để dùng MockAIProvider
+
+# Vector Store — chọn 1 trong 2:
+VECTOR_STORE=qdrant
+
+# Qdrant Cloud (ưu tiên nếu QDRANT_URL có giá trị)
+QDRANT_URL=https://<cluster-id>.us-east-1-1.aws.cloud.qdrant.io
+QDRANT_API_KEY=<jwt-key>
+
+# Qdrant local Docker (fallback khi QDRANT_URL trống)
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+
+# Metadata Store
+METADATA_STORE=memory        # hoặc postgres (cần docker-compose up postgres)
+USE_S3=false
+```
+
+```bash
+# Chạy pipeline với FileAdapter (file local, không cần Kafka)
 python -c "
 from adapters.file_adapter import FileAdapter
 from pipeline.run import run
-job = FileAdapter().map('data/sample/test.pdf')
+job = FileAdapter().map('data/sample/policy.txt')
 print(run(job))
 "
+
+# Chạy toàn bộ test suite
+pytest -q
 ```
 
 ---
