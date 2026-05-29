@@ -127,7 +127,8 @@ jobs:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: projects/289299478169/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@vintravel-chatbot.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
