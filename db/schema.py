@@ -1,0 +1,85 @@
+"""
+Single source of truth cho PostgreSQL schema.
+
+SQLMetadataStore import tables từ đây.
+Alembic env.py import `metadata` từ đây để autogenerate migrations.
+
+Thêm column / table mới ở đây → chạy:
+    alembic revision --autogenerate -m "mô tả thay đổi"
+    alembic upgrade head
+"""
+from __future__ import annotations
+
+from sqlalchemy import (
+    JSON,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+)
+
+metadata = MetaData()
+
+documents = Table(
+    "documents",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("file_path", String, nullable=False),
+    Column("file_name", String),
+    Column("file_type", String),
+    Column("document_type", String, nullable=False, server_default="general"),
+    Column("title", String),
+    Column("description", Text),
+    Column("language", String, nullable=False, server_default="vi"),
+    Column("status", String, nullable=False, server_default="pending"),
+    Column("uploaded_by", String),
+    Column("org_id", String),
+    Column("total_chunks", Integer),
+    Column("uploaded_at", DateTime, nullable=False),
+    Column("processed_at", DateTime),
+    Column("updated_at", DateTime, nullable=False),
+)
+
+document_permissions = Table(
+    "document_permissions",
+    metadata,
+    Column("doc_id", String, primary_key=True),
+    Column("visibility", String, nullable=False, server_default="private"),
+    Column("owner_id", String),
+    Column("org_id", String),
+    Column("allowed_roles", JSON, nullable=False, server_default="[]"),
+    Column("allowed_users", JSON, nullable=False, server_default="[]"),
+    Column("updated_at", DateTime, nullable=False),
+)
+
+document_chunks = Table(
+    "document_chunks",
+    metadata,
+    Column("chunk_id", String, primary_key=True),
+    Column("doc_id", String, nullable=False),
+    Column("chunk_index", Integer, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("page_start", Integer),
+    Column("page_end", Integer),
+    Column("section", String),
+    Column("token_count", Integer),
+    Column("created_at", DateTime, nullable=False),
+)
+
+ingestion_jobs = Table(
+    "ingestion_jobs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("doc_id", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("chunk_count", Integer, nullable=False, server_default="0"),
+    Column("embedding_model", String),
+    Column("duration_seconds", Float),
+    Column("error_message", Text),
+    Column("started_at", DateTime, nullable=False),
+    Column("finished_at", DateTime),
+)

@@ -352,6 +352,64 @@ Phase 4 — Production ready
 
 ---
 
+## Database Migration — Alembic
+
+Schema được kiểm soát bằng Alembic. `db/schema.py` là single source of truth.
+
+### Cấu trúc
+
+```
+db/
+└── schema.py                    # MetaData + 4 Table definitions (documents, document_permissions,
+                                 #   document_chunks, ingestion_jobs)
+migrations/
+├── env.py                       # Alembic env — import metadata từ db/schema.py, URL từ settings
+├── script.py.mako               # template tạo migration file
+└── versions/
+    └── db994690f60c_initial_schema.py   # Migration đầu tiên — tạo toàn bộ 4 bảng
+alembic.ini                      # Alembic config (script_location, logging)
+```
+
+### Workflow
+
+```bash
+# Apply tất cả migrations lên DB (lần đầu hoặc sau deploy)
+alembic upgrade head
+
+# Rollback 1 version
+alembic downgrade -1
+
+# Xem lịch sử migration
+alembic history --verbose
+
+# Xem DB đang ở version nào
+alembic current
+```
+
+### Khi thêm column / bảng mới
+
+```bash
+# 1. Sửa db/schema.py — thêm Column hoặc Table mới
+# 2. Tạo migration file
+alembic revision -m "add_source_url_to_documents"
+# 3. Điền upgrade() và downgrade() trong file vừa tạo
+# 4. Test offline (xem SQL được generate)
+alembic upgrade head --sql
+# 5. Apply lên DB
+alembic upgrade head
+```
+
+### Dev vs Production
+
+| Môi trường | Cách tạo schema |
+|---|---|
+| Dev / Test (fresh DB) | `SQLMetadataStore.__init__` gọi `create_all()` — tự động tạo nếu chưa có |
+| Production / Staging (DB đã có data) | `alembic upgrade head` — chỉ apply các migration chưa chạy |
+
+> **Không bao giờ** chạy `create_all()` trên production DB có data — nó không detect schema đang lệch.
+
+---
+
 ## Quy tắc cứng
 
 ```

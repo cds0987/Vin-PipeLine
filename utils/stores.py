@@ -196,68 +196,23 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
 
 class SQLMetadataStore:
     def __init__(self, db_url: str | None = None) -> None:
-        from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, MetaData, String, Table, Text, create_engine
-        from sqlalchemy.dialects.postgresql import JSONB
+        from sqlalchemy import create_engine
+        from db.schema import (
+            document_chunks,
+            document_permissions,
+            documents,
+            ingestion_jobs,
+            metadata as schema_metadata,
+        )
 
         self._engine = create_engine(db_url or settings.DB_URL, future=True)
-        self._metadata = MetaData()
-        json_type = JSONB if self._engine.dialect.name == "postgresql" else JSON
-        self._documents = Table(
-            "documents",
-            self._metadata,
-            Column("id", String, primary_key=True),
-            Column("file_path", String, nullable=False),
-            Column("file_name", String),
-            Column("file_type", String),
-            Column("document_type", String, nullable=False),
-            Column("title", String),
-            Column("description", Text),
-            Column("language", String, nullable=False),
-            Column("status", String, nullable=False),
-            Column("uploaded_by", String),
-            Column("org_id", String),
-            Column("uploaded_at", DateTime, nullable=False),
-            Column("processed_at", DateTime),
-            Column("updated_at", DateTime, nullable=False),
-            Column("total_chunks", Integer),
-        )
-        self._permissions = Table(
-            "document_permissions",
-            self._metadata,
-            Column("doc_id", String, primary_key=True),
-            Column("visibility", String, nullable=False),
-            Column("owner_id", String),
-            Column("org_id", String),
-            Column("allowed_roles", json_type, nullable=False),
-            Column("allowed_users", json_type, nullable=False),
-            Column("updated_at", DateTime, nullable=False),
-        )
-        self._chunks = Table(
-            "document_chunks",
-            self._metadata,
-            Column("chunk_id", String, primary_key=True),
-            Column("doc_id", String, nullable=False),
-            Column("chunk_index", Integer, nullable=False),
-            Column("content", Text, nullable=False),
-            Column("page_start", Integer),
-            Column("page_end", Integer),
-            Column("section", String),
-            Column("token_count", Integer),
-            Column("created_at", DateTime, nullable=False),
-        )
-        self._jobs = Table(
-            "ingestion_jobs",
-            self._metadata,
-            Column("id", String, primary_key=True),
-            Column("doc_id", String, nullable=False),
-            Column("status", String, nullable=False),
-            Column("chunk_count", Integer, nullable=False, default=0),
-            Column("embedding_model", String),
-            Column("duration_seconds", Float),
-            Column("error_message", Text),
-            Column("started_at", DateTime, nullable=False),
-            Column("finished_at", DateTime),
-        )
+        self._metadata = schema_metadata
+        self._documents = documents
+        self._permissions = document_permissions
+        self._chunks = document_chunks
+        self._jobs = ingestion_jobs
+        # create_all là idempotent — tạo bảng nếu chưa có, bỏ qua nếu đã tồn tại
+        # Dùng cho dev/test fresh DB; production dùng: alembic upgrade head
         self._metadata.create_all(self._engine)
 
     def upsert(self, doc: DocumentRecord) -> None:
