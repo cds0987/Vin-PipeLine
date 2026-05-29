@@ -34,13 +34,15 @@ class ChunkResult(BaseModel):
 
 
 class DocumentRecord(BaseModel):
-    doc_id: str
-    file_uri: str
+    id: str
+    file_path: str
     file_name: str | None = None
-    document_type: str = "general"
+    file_type: str | None = None        # pdf | docx | txt | html | image — format kỹ thuật
+    document_type: str = "general"      # policy | contract | manual — phân loại nghiệp vụ
     language: str = "vi"
     status: str = "pending"
     uploaded_by: str | None = None
     org_id: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    processed_at: datetime | None = None
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

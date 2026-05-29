@@ -16,15 +16,16 @@ def run(
     vector_store.delete(job.doc_id)
     metadata_store.update_status(job.doc_id, "indexing")
     record = DocumentRecord(
-        doc_id=job.doc_id,
-        file_uri=job.file_uri,
+        id=job.doc_id,
+        file_path=job.file_uri,
         file_name=job.metadata.get("file_name") or Path(job.file_uri).name,
+        file_type=Path(job.file_uri).suffix.lstrip(".").lower() or None,
         document_type=job.document_type,
         language=job.language,
         status="indexing",
         uploaded_by=(job.permission.owner_id if job.permission else None),
         org_id=(job.permission.org_id if job.permission else None),
-        created_at=datetime.now(timezone.utc),
+        uploaded_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
     metadata_store.upsert(record)

@@ -27,7 +27,7 @@ Giữ lại những gì có thể tái sử dụng, xóa những gì không còn
 |---|---|---|
 | `utils/notifier.py` | Kafka publish logic giống hệt | Đổi topic names |
 | `utils/storage.py` | Đọc file từ S3 | Đổi `read parquet` → `read binary` |
-| `docker-compose.yml` | MinIO + Kafka + Airflow base | Thêm PostgreSQL + Chroma |
+| `docker-compose.yml` | MinIO + Kafka + Airflow base | Thêm PostgreSQL + Qdrant |
 | `docker/Dockerfile.spark` | Base Python + Java image | Bỏ PySpark, giữ Python |
 | `dags/pipeline_dag.py` | Airflow DAG pattern | Đổi trigger: S3Sensor → KafkaSensor |
 | `streaming/kafka_consumer.py` | Kafka consume → process | Đổi logic xử lý |
@@ -74,10 +74,11 @@ rag-pipeline/
 │   └── mapper.py                # DocumentUploaded → IngestJob
 │
 ├── pipeline/
-│   ├── 01_parse.py              # s3_uri → raw text (PDF/DOCX/TXT)
-│   ├── 02_chunk.py              # text → chunks[] (sliding window)
-│   ├── 03_embed.py              # chunks[] → vectors[]
-│   ├── 04_index.py              # write VectorDB + MetadataDB + PermissionStore
+│   ├── 01_parse.py              # file_uri → raw text (PDF/DOCX/TXT/HTML/Image)
+│   ├── 02_clean.py              # raw text → normalized text
+│   ├── 03_chunk.py              # text → chunks[] (sliding window)
+│   ├── 04_embed.py              # chunks[] → vectors[]
+│   ├── 05_index.py              # write VectorDB + MetadataDB + PermissionStore
 │   └── run.py                   # run(job: IngestJob) → dict
 │
 ├── retrieval/
@@ -106,7 +107,7 @@ rag-pipeline/
 │   ├── Dockerfile.api
 │   └── Dockerfile.test
 │
-├── docker-compose.yml           # MinIO + Kafka + Airflow + PostgreSQL + Chroma
+├── docker-compose.yml           # MinIO + Kafka + Airflow + PostgreSQL + Qdrant
 └── requirements.txt
 ```
 
@@ -220,23 +221,28 @@ def map_event_to_job(event: DocumentEvent) -> IngestJob:
 ```python
 # 01_parse.py
 def run(job: IngestJob) -> str:
-    """s3_uri → raw text. Ẩn: PDF/DOCX/TXT parsing, OCR fallback."""
+    """file_uri → raw text. Ẩn: PDF/DOCX/TXT/HTML/Image parsing, OCR fallback."""
 
-# 02_chunk.py
-def run(text: str, job: IngestJob) -> list[dict]:
-    """text → chunks[]. Ẩn: sliding window, overlap, metadata per chunk."""
+# 02_clean.py
+def run(text: str) -> str:
+    """raw text → normalized text. Ẩn: CRLF normalization, collapse whitespace/newlines."""
 
-# 03_embed.py
-def run(chunks: list[dict]) -> list[dict]:
-    """chunks → chunks với embedding[]. Ẩn: OpenAI API, batching, retry."""
+# 03_chunk.py
+def run(text: str, job: IngestJob) -> list[ChunkResult]:
+    """text → chunks[]. Ẩn: sliding window (CHUNK_SIZE=512 tokens, CHUNK_OVERLAP=64), metadata per chunk."""
 
-# 04_index.py
-def run(chunks: list[dict], job: IngestJob) -> dict:
+# 04_embed.py
+def run(chunks: list[ChunkResult]) -> list[ChunkResult]:
+    """chunks → chunks với embedding[]. Ẩn: AIProvider.embed(), batching."""
+
+# 05_index.py
+def run(chunks: list[ChunkResult], job: IngestJob) -> dict:
     """Ghi VectorDB + MetadataDB + PermissionStore. Trả stats."""
 
 # run.py — orchestrate, caller chỉ cần gọi 1 hàm
 def run(job: IngestJob) -> dict:
     text   = parse.run(job)
+    text   = clean.run(text)
     chunks = chunk.run(text, job)
     chunks = embed.run(chunks)
     stats  = index.run(chunks, job)
@@ -246,7 +252,7 @@ def run(job: IngestJob) -> dict:
 
 ---
 
-## docker-compose.yml — thêm PostgreSQL + Chroma
+## docker-compose.yml — thêm PostgreSQL + Qdrant
 
 ```yaml
   postgres:
@@ -262,12 +268,12 @@ def run(job: IngestJob) -> dict:
       interval: 10s
       retries: 5
 
-  chroma:
-    image: chromadb/chroma:latest
-    ports: ["8000:8000"]
-    volumes: [chroma_data:/chroma/chroma]
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports: ["6333:6333"]
+    volumes: [qdrant_data:/qdrant/storage]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
       interval: 10s
       retries: 5
 ```
@@ -317,7 +323,7 @@ Phase 1 — Pipeline core (tuần 1)
   Day 2:  utils/ai_provider.py (AIProvider Protocol + OpenAIProvider — hỗ trợ base_url)
   Day 3:  utils/storage.py (adapt read binary) + utils/validator.py + utils/mapper.py
   Day 4:  pipeline/01_parse.py (PDF/DOCX/TXT) + pipeline/02_clean.py (normalize)
-  Day 5:  pipeline/03_chunk.py (sliding window 300–800 tokens, overlap)
+  Day 5:  pipeline/03_chunk.py (sliding window, CHUNK_SIZE=512 tokens, CHUNK_OVERLAP=64)
   Day 6:  pipeline/04_embed.py (dùng AIProvider — test với Ollama local, không cần cloud)
   Day 7:  docker-compose up (Qdrant + PostgreSQL) → pipeline/05_index.py
   Day 8:  pipeline/run.py + FileAdapter → test end-to-end 20 file thật

@@ -56,7 +56,7 @@ Input (PDF / DOCX / PPTX / TXT / MD / HTML / Image)
    02_clean      ─── loại noise, normalize (rule-based)
         │
         ▼
-   03_chunk      ─── sliding window 300–800 tokens, overlap
+   03_chunk      ─── sliding window (CHUNK_SIZE=512 tokens, CHUNK_OVERLAP=64 default)
         │
         ▼
    04_embed      ─── AIProvider.embed()
@@ -144,18 +144,20 @@ QDRANT_URL có giá trị?
 
 class VectorStore(Protocol):
     def upsert(self, chunks: list[ChunkResult]) -> None: ...
-    def search(self, vector: list[float], top_k: int, filters: dict) -> list[ChunkResult]: ...
+    def search(self, vector: list[float], top_k: int, filters: dict | None = None) -> list[ChunkResult]: ...
     def delete(self, doc_id: str) -> None: ...
 
 class MetadataStore(Protocol):
     def upsert(self, doc: DocumentRecord) -> None: ...
     def update_status(self, doc_id: str, status: str) -> None: ...
     def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None: ...
+    def get_permission(self, doc_id: str) -> PermissionModel | None: ...
 
 # Implementations — thêm class mới khi SA đổi stack, pipeline không đổi
-class QdrantStore(VectorStore): ...        # default (local + cloud)
-class InMemoryVectorStore(VectorStore): ...# test / CI / fallback
+class QdrantStore(VectorStore): ...             # default (local + cloud)
+class InMemoryVectorStore(VectorStore): ...     # test / CI / fallback
 class SQLMetadataStore(MetadataStore): ...
+class FileMetadataStore(MetadataStore): ...     # local dev / fallback khi Postgres unavailable
 class InMemoryMetadataStore(MetadataStore): ... # test / CI
 ```
 
@@ -164,40 +166,48 @@ class InMemoryMetadataStore(MetadataStore): ... # test / CI
 ## Config — tất cả thay đổi qua env vars
 
 ```python
-# config/settings.py
+# config/settings.py — pydantic-settings (BaseSettings), đọc từ env vars / .env
 
 # AI Provider
-AI_BASE_URL    = os.getenv("AI_BASE_URL",   "https://api.openai.com/v1")
-AI_API_KEY     = os.getenv("AI_API_KEY",    "sk-...")
-EMBED_MODEL    = os.getenv("EMBED_MODEL",   "text-embedding-3-small")
-VISION_MODEL   = os.getenv("VISION_MODEL",  "gpt-4o")
-EMBEDDING_DIM  = int(os.getenv("EMBEDDING_DIM", "1536"))
+AI_PROVIDER    = "auto"               # "auto" | "mock" | "openai"; "auto" → OpenAI nếu có API key, else Mock
+AI_BASE_URL    = None                 # e.g. "https://api.openai.com/v1" hoặc Ollama/vLLM URL
+AI_API_KEY     = None                 # set để dùng OpenAI; để None → MockAIProvider
+EMBED_MODEL    = "text-embedding-3-small"
+VISION_MODEL   = "gpt-4o"
+EMBEDDING_DIM  = 1536
 
 # Chunking
-CHUNK_SIZE     = int(os.getenv("CHUNK_SIZE",    "512"))
-CHUNK_OVERLAP  = int(os.getenv("CHUNK_OVERLAP", "64"))
+CHUNK_SIZE     = 512                  # tokens per chunk
+CHUNK_OVERLAP  = 64                   # overlap tokens
 
 # Vector DB
-VECTOR_STORE    = os.getenv("VECTOR_STORE",    "qdrant")
-QDRANT_HOST     = os.getenv("QDRANT_HOST",     "qdrant")
-QDRANT_PORT     = int(os.getenv("QDRANT_PORT", "6333"))
-QDRANT_URL      = os.getenv("QDRANT_URL")       # Qdrant Cloud override
-QDRANT_API_KEY  = os.getenv("QDRANT_API_KEY")   # Qdrant Cloud auth
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "documents")
+VECTOR_STORE      = "qdrant"          # "qdrant" | "memory"
+QDRANT_HOST       = "qdrant"
+QDRANT_PORT       = 6333
+QDRANT_URL        = None              # Qdrant Cloud override (xem fallback logic trên)
+QDRANT_API_KEY    = None              # Qdrant Cloud auth
+QDRANT_COLLECTION = "documents"
 
 # Metadata DB
-DB_URL         = os.getenv("DATABASE_URL",  "postgresql://rag:rag@postgres:5432/ragdb")
+METADATA_STORE = "postgres"           # "postgres" | "file" | "memory"
+DB_URL         = "postgresql://rag:rag@postgres:5432/ragdb"
 
-# Storage
-S3_BUCKET      = os.getenv("S3_BUCKET",     "rag-pipeline-local")
-USE_S3         = os.getenv("USE_S3",        "false").lower() == "true"
+# Storage (S3 / MinIO)
+S3_BUCKET             = "rag-pipeline-local"
+USE_S3                = False
+S3_ENDPOINT           = "http://minio:9000"
+AWS_ACCESS_KEY_ID     = None         # None → boto3 credential chain (IAM role, etc.)
+AWS_SECRET_ACCESS_KEY = None
 
 # Kafka
-KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
-TOPIC_INGEST    = "DocumentUploaded"
-TOPIC_DONE      = "EmbeddingDone"
-TOPIC_FAILED    = "IndexingFailed"
-TOPIC_DLQ       = "DocumentUploaded.DLQ"
+KAFKA_BOOTSTRAP      = "kafka:9092"
+TOPIC_INGEST         = "DocumentUploaded"
+TOPIC_DONE           = "EmbeddingDone"
+TOPIC_FAILED         = "IndexingFailed"
+TOPIC_PERMISSION     = "PermissionUpdated"
+TOPIC_DLQ            = "DocumentUploaded.DLQ"
+CONSUMER_GROUP_ID    = "de-ingestion-service"
+CONSUMER_MAX_RETRIES = 3
 ```
 
 ---
@@ -206,7 +216,7 @@ TOPIC_DLQ       = "DocumentUploaded.DLQ"
 
 ```
 POST /ingest
-  Body:     { "doc_id": "...", "file_uri": "s3://...", "permission": {...}, "metadata": {...} }
+  Body:     { "doc_id": "...", "file_uri": "s3://...", "uploaded_by": "...", "org_id": "...", "permission": {...}, "metadata": {...} }
   Response: { "doc_id": "...", "status": "queued" }
 
 POST /retrieve-context
@@ -272,25 +282,27 @@ GET /health
 
 ```sql
 documents (
-  doc_id          TEXT PRIMARY KEY,
-  s3_uri          TEXT NOT NULL,
+  id              TEXT PRIMARY KEY,        -- doc_id từ Kafka event (UUID string)
+  file_path       TEXT NOT NULL,           -- s3://... hoặc /local/path
   file_name       TEXT,
-  document_type   TEXT,
+  file_type       TEXT,                    -- pdf | docx | txt | html | image (format kỹ thuật)
+  document_type   TEXT DEFAULT 'general',  -- policy | contract | manual (phân loại nghiệp vụ)
   language        TEXT DEFAULT 'vi',
   status          TEXT DEFAULT 'pending',  -- pending | indexing | indexed | failed
   uploaded_by     TEXT,
   org_id          TEXT,
-  created_at      TIMESTAMP,
+  uploaded_at     TIMESTAMP,               -- khi user upload file
+  processed_at    TIMESTAMP,               -- khi pipeline hoàn thành
   updated_at      TIMESTAMP
 )
 
 document_permissions (
-  doc_id          TEXT PRIMARY KEY,
+  doc_id          TEXT PRIMARY KEY,        -- FK logic đến documents.id
   visibility      TEXT DEFAULT 'private',  -- private | org | public
   owner_id        TEXT,
   org_id          TEXT,
-  allowed_roles   JSONB DEFAULT '[]',
-  allowed_users   JSONB DEFAULT '[]',
+  allowed_roles   JSONB DEFAULT '[]',      -- list of role name strings (từ BE)
+  allowed_users   JSONB DEFAULT '[]',      -- list of user_id strings (từ BE)
   updated_at      TIMESTAMP
 )
 ```
@@ -334,15 +346,29 @@ document_permissions (
 ## Contract nội bộ (không expose ra REST API)
 
 ```python
-class IngestJob(BaseModel):      # Input Port
+class IngestJob(BaseModel):      # Input Port — contract với BE, không đổi
     doc_id: str
-    file_uri: str
+    file_uri: str                # s3://... hoặc local path
     language: str = "vi"
-    document_type: str = "general"
+    document_type: str = "general"   # phân loại nghiệp vụ: policy | contract | manual
     permission: Optional[PermissionModel] = None
     metadata: dict = {}
 
-class ChunkResult(BaseModel):    # Output Port
+class DocumentRecord(BaseModel): # DB record — documents table
+    id: str                      # = doc_id từ IngestJob
+    file_path: str               # = file_uri từ IngestJob
+    file_name: str | None = None
+    file_type: str | None = None # format kỹ thuật: pdf | docx | txt | html | image
+    document_type: str = "general"
+    language: str = "vi"
+    status: str = "pending"      # pending | indexing | indexed | failed
+    uploaded_by: str | None = None
+    org_id: str | None = None
+    uploaded_at: datetime        # khi user upload
+    processed_at: datetime | None = None  # khi pipeline xong
+    updated_at: datetime
+
+class ChunkResult(BaseModel):    # Output Port — contract bất biến
     chunk_id: str
     doc_id: str
     content: str

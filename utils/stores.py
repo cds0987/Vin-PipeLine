@@ -189,15 +189,17 @@ class SQLMetadataStore:
         self._documents = Table(
             "documents",
             self._metadata,
-            Column("doc_id", String, primary_key=True),
-            Column("file_uri", String, nullable=False),
+            Column("id", String, primary_key=True),
+            Column("file_path", String, nullable=False),
             Column("file_name", String),
+            Column("file_type", String),
             Column("document_type", String, nullable=False),
             Column("language", String, nullable=False),
             Column("status", String, nullable=False),
             Column("uploaded_by", String),
             Column("org_id", String),
-            Column("created_at", DateTime, nullable=False),
+            Column("uploaded_at", DateTime, nullable=False),
+            Column("processed_at", DateTime),
             Column("updated_at", DateTime, nullable=False),
         )
         self._permissions = Table(
@@ -218,35 +220,37 @@ class SQLMetadataStore:
 
         payload = doc.model_dump()
         with self._engine.begin() as conn:
-            conn.execute(delete(self._documents).where(self._documents.c.doc_id == doc.doc_id))
+            conn.execute(delete(self._documents).where(self._documents.c.id == doc.id))
             conn.execute(self._documents.insert().values(**payload))
 
     def update_status(self, doc_id: str, status: str) -> None:
         from sqlalchemy import select
 
         with self._engine.begin() as conn:
-            row = conn.execute(select(self._documents).where(self._documents.c.doc_id == doc_id)).mappings().first()
+            row = conn.execute(select(self._documents).where(self._documents.c.id == doc_id)).mappings().first()
             if row is None:
                 conn.execute(
                     self._documents.insert().values(
-                        doc_id=doc_id,
-                        file_uri="",
+                        id=doc_id,
+                        file_path="",
                         file_name=None,
+                        file_type=None,
                         document_type="general",
                         language="vi",
                         status=status,
                         uploaded_by=None,
                         org_id=None,
-                        created_at=datetime.now(timezone.utc),
+                        uploaded_at=datetime.now(timezone.utc),
+                        processed_at=None,
                         updated_at=datetime.now(timezone.utc),
                     )
                 )
                 return
             conn.execute(
                 self._documents.update()
-                .where(self._documents.c.doc_id == doc_id)
+                .where(self._documents.c.id == doc_id)
                 .values(status=status, updated_at=datetime.now(timezone.utc))
-                )
+            )
 
     def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None:
         from sqlalchemy import delete
@@ -295,13 +299,13 @@ class FileMetadataStore:
 
     def upsert(self, doc: DocumentRecord) -> None:
         docs = self._read_json(self._documents_file)
-        docs[doc.doc_id] = doc.model_dump(mode="json")
+        docs[doc.id] = doc.model_dump(mode="json")
         self._write_json(self._documents_file, docs)
 
     def update_status(self, doc_id: str, status: str) -> None:
         docs = self._read_json(self._documents_file)
         doc = docs.get(doc_id, {})
-        doc["doc_id"] = doc_id
+        doc["id"] = doc_id
         doc["status"] = status
         doc["updated_at"] = datetime.now(timezone.utc).isoformat()
         docs[doc_id] = doc
@@ -324,13 +328,13 @@ class InMemoryMetadataStore:
         self._permissions: dict[str, PermissionModel] = {}
 
     def upsert(self, doc: DocumentRecord) -> None:
-        self._documents[doc.doc_id] = doc
+        self._documents[doc.id] = doc
 
     def update_status(self, doc_id: str, status: str) -> None:
         if doc_id in self._documents:
             self._documents[doc_id] = self._documents[doc_id].model_copy(update={"status": status})
         else:
-            self._documents[doc_id] = DocumentRecord(doc_id=doc_id, file_uri="", status=status)
+            self._documents[doc_id] = DocumentRecord(id=doc_id, file_path="", status=status)
 
     def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None:
         self._permissions[doc_id] = permission
