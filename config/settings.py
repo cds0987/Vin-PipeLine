@@ -24,11 +24,12 @@ class Settings(BaseSettings):
     chunk_size: int = 512
     chunk_overlap: int = 64
 
-    vector_store: str = "chroma"
-    chroma_host: str = "chroma"
-    chroma_port: int = 8000
-    chroma_collection: str = "documents"
-    chroma_persist_dir: str = "data/chroma"
+    vector_store: str = "qdrant"
+    qdrant_host: str = "qdrant"
+    qdrant_port: int = 6333
+    qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "documents"
 
     metadata_store: str = "postgres"
     database_url: str = "postgresql://rag:rag@postgres:5432/ragdb"
@@ -84,10 +85,11 @@ CHUNK_SIZE = _settings.chunk_size
 CHUNK_OVERLAP = _settings.chunk_overlap
 
 VECTOR_STORE = _settings.vector_store
-CHROMA_HOST = _settings.chroma_host
-CHROMA_PORT = _settings.chroma_port
-CHROMA_COLLECTION = _settings.chroma_collection
-CHROMA_PERSIST_DIR = str((BASE_DIR / _settings.chroma_persist_dir).resolve())
+QDRANT_HOST = _settings.qdrant_host
+QDRANT_PORT = _settings.qdrant_port
+QDRANT_URL: str | None = _settings.qdrant_url
+QDRANT_API_KEY: str | None = _settings.qdrant_api_key
+QDRANT_COLLECTION = _settings.qdrant_collection
 
 METADATA_STORE = _settings.metadata_store
 DB_URL = _settings.database_url
@@ -107,5 +109,5 @@ TOPIC_DLQ = _settings.topic_dlq
 CONSUMER_GROUP_ID = _settings.consumer_group_id
 CONSUMER_MAX_RETRIES = _settings.consumer_max_retries
 
-for _path in (RAW_DIR, DLQ_DIR, SAMPLE_DIR, Path(CHROMA_PERSIST_DIR)):
+for _path in (RAW_DIR, DLQ_DIR, SAMPLE_DIR):
     _path.mkdir(parents=True, exist_ok=True)

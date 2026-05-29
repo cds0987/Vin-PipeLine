@@ -44,68 +44,93 @@ class MetadataStore(Protocol):
         ...
 
 
-class ChromaStore:
+class QdrantStore:
     def __init__(self) -> None:
-        import chromadb
+        import uuid as _uuid
+        from qdrant_client import QdrantClient
+        from qdrant_client.models import Distance, VectorParams
 
-        host = settings.CHROMA_HOST
-        port = settings.CHROMA_PORT
-        if host:
-            try:
-                self._client = chromadb.HttpClient(host=host, port=port)
-                self._client.heartbeat()
-            except Exception:
-                self._client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+        self._uuid = _uuid
+        if settings.QDRANT_URL:
+            self._client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
         else:
-            self._client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-        self._collection = self._client.get_or_create_collection(name=settings.CHROMA_COLLECTION)
+            self._client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
+
+        self._collection = settings.QDRANT_COLLECTION
+        existing = {c.name for c in self._client.get_collections().collections}
+        if self._collection not in existing:
+            self._client.create_collection(
+                collection_name=self._collection,
+                vectors_config=VectorParams(size=settings.EMBEDDING_DIM, distance=Distance.COSINE),
+            )
+
+    def _point_id(self, chunk_id: str) -> str:
+        return str(self._uuid.uuid5(self._uuid.NAMESPACE_DNS, chunk_id))
 
     def upsert(self, chunks: list[ChunkResult]) -> None:
+        from qdrant_client.models import PointStruct
+
         if not chunks:
             return
-        self._collection.upsert(
-            ids=[chunk.chunk_id for chunk in chunks],
-            documents=[chunk.content for chunk in chunks],
-            embeddings=[chunk.embedding for chunk in chunks],
-            metadatas=[
-                {
+        points = [
+            PointStruct(
+                id=self._point_id(chunk.chunk_id),
+                vector=chunk.embedding,
+                payload={
+                    "chunk_id": chunk.chunk_id,
                     "doc_id": chunk.doc_id,
+                    "content": chunk.content,
                     "page_start": chunk.page_start,
                     "page_end": chunk.page_end,
                     "section": chunk.section,
                     **chunk.metadata,
-                }
-                for chunk in chunks
-            ],
-        )
+                },
+            )
+            for chunk in chunks
+        ]
+        self._client.upsert(collection_name=self._collection, points=points)
 
     def search(self, vector: list[float], top_k: int, filters: dict | None = None) -> list[ChunkResult]:
-        result = self._collection.query(query_embeddings=[vector], n_results=top_k)
+        hits = self._client.search(
+            collection_name=self._collection,
+            query_vector=vector,
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False,
+        )
         chunks: list[ChunkResult] = []
-        ids = result.get("ids", [[]])[0]
-        docs = result.get("documents", [[]])[0]
-        metas = result.get("metadatas", [[]])[0]
-        distances = result.get("distances", [[]])[0]
-        for idx, chunk_id in enumerate(ids):
-            metadata = dict(metas[idx] or {})
-            metadata["score"] = 1 - distances[idx] if idx < len(distances) else None
-            doc_id = metadata.pop("doc_id")
+        for hit in hits:
+            payload = dict(hit.payload or {})
+            chunk_id = payload.pop("chunk_id")
+            doc_id = payload.pop("doc_id")
+            content = payload.pop("content", "")
+            page_start = payload.pop("page_start", None)
+            page_end = payload.pop("page_end", None)
+            section = payload.pop("section", None)
+            payload["score"] = hit.score
             chunks.append(
                 ChunkResult(
                     chunk_id=chunk_id,
                     doc_id=doc_id,
-                    content=docs[idx],
+                    content=content,
                     embedding=[],
-                    page_start=metadata.pop("page_start", None),
-                    page_end=metadata.pop("page_end", None),
-                    section=metadata.pop("section", None),
-                    metadata=metadata,
+                    page_start=page_start,
+                    page_end=page_end,
+                    section=section,
+                    metadata=payload,
                 )
             )
         return chunks
 
     def delete(self, doc_id: str) -> None:
-        self._collection.delete(where={"doc_id": doc_id})
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        self._client.delete(
+            collection_name=self._collection,
+            points_selector=Filter(
+                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+            ),
+        )
 
 
 class InMemoryVectorStore:
@@ -309,9 +334,9 @@ def build_vector_store() -> VectorStore:
     if settings.VECTOR_STORE == "memory":
         return InMemoryVectorStore()
     try:
-        return ChromaStore()
+        return QdrantStore()
     except Exception as exc:
-        log.warning("ChromaStore unavailable (%s), falling back to InMemoryVectorStore", exc)
+        log.warning("QdrantStore unavailable (%s), falling back to InMemoryVectorStore", exc)
         return InMemoryVectorStore()
 
 

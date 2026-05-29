@@ -59,14 +59,15 @@ services:
       retries: 5
 
   # ── Vector DB ──────────────────────────────────────────────────────────────
-  chroma:
-    image: chromadb/chroma:latest
+  qdrant:
+    image: qdrant/qdrant:latest
     ports:
-      - "8001:8000"
+      - "6333:6333"
+      - "6334:6334"
     volumes:
-      - chroma_data:/chroma/chroma
+      - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
       interval: 10s
       retries: 5
 
@@ -84,8 +85,9 @@ services:
       - EMBED_MODEL=${EMBED_MODEL:-text-embedding-3-small}
       - VISION_MODEL=${VISION_MODEL:-gpt-4o}
       - DATABASE_URL=postgresql://rag:rag@postgres:5432/ragdb
-      - CHROMA_HOST=chroma
-      - CHROMA_PORT=8000
+      - VECTOR_STORE=qdrant
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
       - KAFKA_BOOTSTRAP=kafka:9092
       - USE_S3=true
       - S3_BUCKET=rag-pipeline-local
@@ -95,7 +97,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      chroma:
+      qdrant:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -114,4 +116,4 @@ volumes:
   minio_data:
   zookeeper_data:
   postgres_data:
-  chroma_data:
+  qdrant_data:
