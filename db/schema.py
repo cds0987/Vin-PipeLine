@@ -33,7 +33,6 @@ documents = Table(
     Column("file_type", String),
     Column("document_type", String, nullable=False, server_default="general"),
     Column("title", String),
-    Column("description", Text),
     Column("language", String, nullable=False, server_default="vi"),
     Column("status", String, nullable=False, server_default="pending"),
     Column("total_chunks", Integer),

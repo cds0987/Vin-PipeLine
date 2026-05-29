@@ -35,6 +35,17 @@ def _uri_to_doc_id(s3_uri: str) -> str:
     return hashlib.md5(s3_uri.encode()).hexdigest()
 
 
+def _derive_document_type(key: str, prefix: str) -> str:
+    # Derive document_type from the first directory segment after the scan prefix.
+    # Example: prefix="raw/", key="raw/contracts/file.pdf" → "contracts"
+    # Example: prefix="raw/", key="raw/file.pdf"           → "general"
+    relative = key[len(prefix):] if key.startswith(prefix) else key
+    parts = relative.split("/")
+    if len(parts) > 1 and parts[0]:
+        return parts[0].lower()
+    return "general"
+
+
 def _s3_client():
     import boto3
 
@@ -99,14 +110,17 @@ class S3Scanner:
 
         for _key, s3_uri, s3_last_modified, file_name in discovered:
             existing = existing_by_path.get(s3_uri)
+            document_type = _derive_document_type(_key, prefix)
+
             if existing is None:
                 log.info("S3Scanner: new file %s", s3_uri)
                 jobs.append(
                     IngestJob(
                         doc_id=_uri_to_doc_id(s3_uri),
                         file_uri=s3_uri,
+                        document_type=document_type,
                         s3_last_modified=s3_last_modified,
-                        metadata={"file_name": file_name},
+                        file_name=file_name,
                     )
                 )
                 continue
@@ -121,8 +135,9 @@ class S3Scanner:
                     IngestJob(
                         doc_id=existing.id,
                         file_uri=s3_uri,
+                        document_type=document_type,
                         s3_last_modified=s3_last_modified,
-                        metadata={"file_name": file_name},
+                        file_name=file_name,
                     )
                 )
                 continue
@@ -136,8 +151,9 @@ class S3Scanner:
                     IngestJob(
                         doc_id=existing.id,
                         file_uri=s3_uri,
+                        document_type=document_type,
                         s3_last_modified=s3_last_modified,
-                        metadata={"file_name": file_name},
+                        file_name=file_name,
                     )
                 )
                 continue

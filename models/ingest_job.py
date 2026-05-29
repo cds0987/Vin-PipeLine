@@ -11,6 +11,7 @@ class IngestJob(BaseModel):
     language: str = "vi"
     document_type: str = "general"
     s3_last_modified: datetime | None = None
+    file_name: str | None = None
     metadata: dict = Field(default_factory=dict)
 
 
@@ -32,7 +33,6 @@ class DocumentRecord(BaseModel):
     file_type: str | None = None        # pdf | docx | txt | html | image
     document_type: str = "general"
     title: str | None = None
-    description: str | None = None
     language: str = "vi"
     status: str = "pending"             # pending | indexing | indexed | failed
     total_chunks: int | None = None

@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import time
 
 from config import settings
 from models.ingest_job import IngestJob
 from utils.ai_provider import AIProvider, build_ai_provider
 from utils.stores import MetadataStore, VectorStore, build_metadata_store, build_vector_store
+from utils.storage import read_binary
+
+log = logging.getLogger(__name__)
+
+
+def _detect_language(pages: list[tuple[int, str]]) -> str:
+    # Use first 5 pages to limit cost. Minimum 50 chars to avoid false positives.
+    # Falls back to "vi" on failure — no external service, langdetect only.
+    text = " ".join(t for _, t in pages[:5])
+    if len(text) < 50:
+        return "vi"
+    try:
+        from langdetect import detect
+        return detect(text)
+    except Exception:
+        return "vi"
 
 parse = importlib.import_module("pipeline.01_parse")
 clean = importlib.import_module("pipeline.02_clean")
@@ -27,16 +44,18 @@ def run(
             raise TimeoutError(f"doc_id={job.doc_id}: ingest timeout exceeded at stage={stage}")
 
     started_at = time.perf_counter()
-    ai = ai_provider or build_ai_provider()
-    vectors = vector_store or build_vector_store()
-    metadata = metadata_store or build_metadata_store()
+    ai = ai_provider or build_ai_provider()[0]
+    vectors = vector_store or build_vector_store()[0]
+    metadata = metadata_store or build_metadata_store()[0]
     try:
         if not metadata.try_claim_ingest(job):
             return {"doc_id": job.doc_id, "status": "skipped", "chunk_count": 0}
         _check_deadline("parse")
-        pages = parse.run(job, ai)
+        file_bytes = read_binary(job.file_uri)
+        pages = parse.run(job, ai, file_bytes)
         _check_deadline("clean")
         pages = clean.run(pages)
+        job = job.model_copy(update={"language": _detect_language(pages)})
         _check_deadline("chunk")
         chunks = chunk.run(pages, job)
         if not chunks:

@@ -23,12 +23,14 @@ def run(
     vector_store.delete(job.doc_id)
     metadata_store.update_status(job.doc_id, "indexing")
 
+    file_name = job.file_name or Path(job.file_uri).name
     record = DocumentRecord(
         id=job.doc_id,
         file_path=job.file_uri,
-        file_name=job.metadata.get("file_name") or Path(job.file_uri).name,
+        file_name=file_name,
         file_type=Path(job.file_uri).suffix.lstrip(".").lower() or None,
         document_type=job.document_type,
+        title=file_name,
         language=job.language,
         status="indexing",
         s3_last_modified=job.s3_last_modified,
@@ -48,8 +50,7 @@ def run(
     processed_at = datetime.now(timezone.utc)
     metadata_store.update_status(job.doc_id, "indexed")
 
-    if hasattr(metadata_store, "update_processed"):
-        metadata_store.update_processed(job.doc_id, len(chunks), processed_at)
+    metadata_store.update_processed(job.doc_id, len(chunks), processed_at)
 
     metadata_store.record_job(
         doc_id=job.doc_id,

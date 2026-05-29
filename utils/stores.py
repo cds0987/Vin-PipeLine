@@ -10,8 +10,6 @@ from config import settings
 from models.ingest_job import ChunkResult, DocumentRecord, IngestJob
 
 log = logging.getLogger(__name__)
-LAST_VECTOR_STORE_BUILD_WARNING: str | None = None
-LAST_METADATA_STORE_BUILD_WARNING: str | None = None
 
 
 class VectorStore(Protocol):
@@ -56,6 +54,14 @@ class MetadataStore(Protocol):
         embedding_model: str = "",
         duration_seconds: float = 0.0,
         error_message: str | None = None,
+    ) -> None: ...
+
+    @abstractmethod
+    def update_processed(
+        self,
+        doc_id: str,
+        total_chunks: int,
+        processed_at: datetime,
     ) -> None: ...
 
 
@@ -360,7 +366,7 @@ class SQLMetadataStore:
                     self._documents.insert().values(
                         id=job.doc_id,
                         file_path=job.file_uri,
-                        file_name=job.metadata.get("file_name"),
+                        file_name=job.file_name,
                         file_type=Path(job.file_uri).suffix.lstrip(".").lower() or None,
                         document_type=job.document_type,
                         language=job.language,
@@ -382,7 +388,7 @@ class SQLMetadataStore:
                 .where(self._documents.c.id == job.doc_id)
                 .values(
                     file_path=job.file_uri,
-                    file_name=job.metadata.get("file_name") or existing.file_name,
+                    file_name=job.file_name or existing.file_name,
                     file_type=Path(job.file_uri).suffix.lstrip(".").lower() or existing.file_type,
                     document_type=job.document_type,
                     language=job.language,
@@ -480,7 +486,7 @@ class FileMetadataStore:
             doc = existing.model_copy(
                 update={
                     "file_path": job.file_uri,
-                    "file_name": job.metadata.get("file_name") or existing.file_name,
+                    "file_name": job.file_name or existing.file_name,
                     "file_type": Path(job.file_uri).suffix.lstrip(".").lower() or existing.file_type,
                     "document_type": job.document_type,
                     "language": job.language,
@@ -493,7 +499,7 @@ class FileMetadataStore:
             doc = DocumentRecord(
                 id=job.doc_id,
                 file_path=job.file_uri,
-                file_name=job.metadata.get("file_name"),
+                file_name=job.file_name,
                 file_type=Path(job.file_uri).suffix.lstrip(".").lower() or None,
                 document_type=job.document_type,
                 language=job.language,
@@ -584,7 +590,7 @@ class InMemoryMetadataStore:
             self._documents[job.doc_id] = DocumentRecord(
                 id=job.doc_id,
                 file_path=job.file_uri,
-                file_name=job.metadata.get("file_name"),
+                file_name=job.file_name,
                 file_type=Path(job.file_uri).suffix.lstrip(".").lower() or None,
                 document_type=job.document_type,
                 language=job.language,
@@ -597,7 +603,7 @@ class InMemoryMetadataStore:
             self._documents[job.doc_id] = existing.model_copy(
                 update={
                     "file_path": job.file_uri,
-                    "file_name": job.metadata.get("file_name") or existing.file_name,
+                    "file_name": job.file_name or existing.file_name,
                     "file_type": Path(job.file_uri).suffix.lstrip(".").lower() or existing.file_type,
                     "document_type": job.document_type,
                     "language": job.language,
@@ -638,37 +644,25 @@ class InMemoryMetadataStore:
         )
 
 
-def build_vector_store() -> VectorStore:
-    global LAST_VECTOR_STORE_BUILD_WARNING
-    LAST_VECTOR_STORE_BUILD_WARNING = None
+def build_vector_store() -> tuple[VectorStore, str | None]:
     if settings.VECTOR_STORE == "memory":
-        return InMemoryVectorStore()
+        return InMemoryVectorStore(), None
     try:
-        return QdrantStore()
+        return QdrantStore(), None
     except Exception as exc:
-        LAST_VECTOR_STORE_BUILD_WARNING = f"QdrantStore unavailable: {exc}"
-        log.warning("%s; falling back to InMemoryVectorStore", LAST_VECTOR_STORE_BUILD_WARNING)
-        return InMemoryVectorStore()
+        warning = f"QdrantStore unavailable: {exc}"
+        log.warning("%s; falling back to InMemoryVectorStore", warning)
+        return InMemoryVectorStore(), warning
 
 
-def build_metadata_store() -> MetadataStore:
-    global LAST_METADATA_STORE_BUILD_WARNING
-    LAST_METADATA_STORE_BUILD_WARNING = None
+def build_metadata_store() -> tuple[MetadataStore, str | None]:
     if settings.METADATA_STORE == "memory":
-        return InMemoryMetadataStore()
+        return InMemoryMetadataStore(), None
     if settings.METADATA_STORE == "file":
-        return FileMetadataStore()
+        return FileMetadataStore(), None
     try:
-        return SQLMetadataStore()
+        return SQLMetadataStore(), None
     except Exception as exc:
-        LAST_METADATA_STORE_BUILD_WARNING = f"SQLMetadataStore unavailable: {exc}"
-        log.warning("%s; falling back to FileMetadataStore", LAST_METADATA_STORE_BUILD_WARNING)
-        return FileMetadataStore()
-
-
-def get_last_vector_store_build_warning() -> str | None:
-    return LAST_VECTOR_STORE_BUILD_WARNING
-
-
-def get_last_metadata_store_build_warning() -> str | None:
-    return LAST_METADATA_STORE_BUILD_WARNING
+        warning = f"SQLMetadataStore unavailable: {exc}"
+        log.warning("%s; falling back to FileMetadataStore", warning)
+        return FileMetadataStore(), warning

@@ -7,7 +7,6 @@ from pathlib import Path
 from config import settings
 from models.ingest_job import IngestJob
 from utils.ai_provider import AIProvider
-from utils.storage import read_binary
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -146,9 +145,12 @@ def _parse_image(file_bytes: bytes, ai_provider: AIProvider) -> list[tuple[int, 
     return [(1, text)] if text else []
 
 
-def run(job: IngestJob, ai_provider: AIProvider) -> list[tuple[int, str]]:
+def run(
+    job: IngestJob,
+    ai_provider: AIProvider,
+    file_bytes: bytes,
+) -> list[tuple[int, str]]:
     """Parse file into (page_number, text) tuples."""
-    file_bytes = read_binary(job.file_uri)
     suffix = Path(job.file_uri).suffix.lower()
     if suffix == ".pdf":
         return _parse_pdf(file_bytes, ai_provider)

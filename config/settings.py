@@ -49,16 +49,6 @@ class Settings(BaseSettings):
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
 
-    kafka_bootstrap: str = "kafka:9092"
-    topic_ingest: str = "DocumentUploaded"
-    topic_done: str = "EmbeddingDone"
-    topic_failed: str = "IndexingFailed"
-    topic_permission: str = "PermissionUpdated"
-    topic_dlq: str = "DocumentUploaded.DLQ"
-
-    consumer_group_id: str = "de-ingestion-service"
-    consumer_max_retries: int = 3
-
     scan_interval_seconds: int = 300   # S3 poll interval; 0 = disable background scanner
     scan_prefix: str = ""              # S3 key prefix to scan, e.g. "raw/"
     scan_max_workers: int = 4          # max concurrent pipeline workers per scan cycle
@@ -134,14 +124,6 @@ S3_ENDPOINT = _settings.s3_endpoint
 AWS_ACCESS_KEY_ID: str | None = _settings.aws_access_key_id
 AWS_SECRET_ACCESS_KEY: str | None = _settings.aws_secret_access_key
 
-KAFKA_BOOTSTRAP = _settings.kafka_bootstrap
-TOPIC_INGEST = _settings.topic_ingest
-TOPIC_DONE = _settings.topic_done
-TOPIC_FAILED = _settings.topic_failed
-TOPIC_PERMISSION = _settings.topic_permission
-TOPIC_DLQ = _settings.topic_dlq
-CONSUMER_GROUP_ID = _settings.consumer_group_id
-CONSUMER_MAX_RETRIES = _settings.consumer_max_retries
 SCAN_INTERVAL_SECONDS = _settings.scan_interval_seconds
 SCAN_PREFIX = _settings.scan_prefix
 SCAN_MAX_WORKERS = _settings.scan_max_workers

@@ -13,8 +13,8 @@ class RetrievalService:
         ai_provider: AIProvider | None = None,
         vector_store: VectorStore | None = None,
     ) -> None:
-        self._ai_provider = ai_provider or build_ai_provider()
-        self._vector_store = vector_store or build_vector_store()
+        self._ai_provider = ai_provider or build_ai_provider()[0]
+        self._vector_store = vector_store or build_vector_store()[0]
         self._query_cache: OrderedDict[str, list[float]] = OrderedDict()
 
     def _embed_query(self, query: str) -> list[float]:

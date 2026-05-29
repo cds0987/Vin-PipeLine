@@ -11,18 +11,12 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from adapters.s3_adapter import S3Scanner
 from config import settings
 from pipeline.run import run as run_pipeline
 from retrieval.service import RetrievalService
-from utils.ai_provider import MockAIProvider, build_ai_provider, get_last_ai_provider_build_warning
-from utils.stores import (
-    MetadataStore,
-    VectorStore,
-    build_metadata_store,
-    build_vector_store,
-    get_last_metadata_store_build_warning,
-    get_last_vector_store_build_warning,
-)
+from utils.ai_provider import MockAIProvider, build_ai_provider
+from utils.stores import MetadataStore, VectorStore, build_metadata_store, build_vector_store
 
 log = logging.getLogger(__name__)
 
@@ -90,8 +84,6 @@ def _run_jobs(jobs, ai_provider, vector_store: VectorStore, metadata_store: Meta
 
 
 def _scan_and_run_once(ai_provider, vector_store: VectorStore, metadata_store: MetadataStore) -> int:
-    from adapters.s3_adapter import S3Scanner
-
     if not _scan_lock.acquire(blocking=False):
         log.warning("Scan already in progress - skipping scanner cycle")
         return 0
@@ -123,15 +115,15 @@ def _scanner_loop(ai_provider, vector_store: VectorStore, metadata_store: Metada
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.ai_provider = build_ai_provider()
-    app.state.vector_store = build_vector_store()
-    app.state.metadata_store = build_metadata_store()
+    app.state.ai_provider, ai_warning = build_ai_provider()
+    app.state.vector_store, vector_warning = build_vector_store()
+    app.state.metadata_store, metadata_warning = build_metadata_store()
     app.state.degraded_reasons = [
         reason
         for reason in (
-            get_last_ai_provider_build_warning(),
-            get_last_vector_store_build_warning(),
-            get_last_metadata_store_build_warning(),
+            ai_warning,
+            vector_warning,
+            metadata_warning,
         )
         if reason
     ]
@@ -164,8 +156,6 @@ def search(request: SearchRequest):
 @app.post("/scan")
 def trigger_scan(request: ScanRequest, background_tasks: BackgroundTasks):
     """Trigger a manual S3 scan and queue ingestion in the background."""
-    from adapters.s3_adapter import S3Scanner
-
     if not _scan_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="scan already in progress")
 
@@ -174,12 +164,8 @@ def trigger_scan(request: ScanRequest, background_tasks: BackgroundTasks):
             bucket=request.bucket,
             prefix=request.prefix,
         )
-    except Exception:
-        _scan_lock.release()
-        raise
     finally:
-        if _scan_lock.locked():
-            _scan_lock.release()
+        _scan_lock.release()
 
     if not jobs:
         return {"status": "scan started", "queued": 0}

@@ -8,7 +8,6 @@ from typing import Any, Protocol
 from config import settings
 
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
-LAST_AI_PROVIDER_BUILD_WARNING: str | None = None
 
 
 class AIProvider(Protocol):
@@ -114,28 +113,22 @@ def _normalize_optional_value(value: str | None) -> str | None:
     return normalized
 
 
-def build_ai_provider() -> AIProvider:
-    global LAST_AI_PROVIDER_BUILD_WARNING
+def build_ai_provider() -> tuple[AIProvider, str | None]:
     provider_name = (settings.AI_PROVIDER or "auto").lower()
     base_url = _normalize_optional_value(settings.AI_BASE_URL)
     api_key = _normalize_optional_value(settings.AI_API_KEY)
-    LAST_AI_PROVIDER_BUILD_WARNING = None
 
     if provider_name == "mock":
-        return MockAIProvider()
+        return MockAIProvider(), None
     if provider_name == "openai":
-        return OpenAIProvider(base_url=base_url, api_key=api_key)
+        return OpenAIProvider(base_url=base_url, api_key=api_key), None
     if provider_name == "auto":
         if api_key:
-            return OpenAIProvider(base_url=base_url, api_key=api_key)
+            return OpenAIProvider(base_url=base_url, api_key=api_key), None
         if not settings.ALLOW_MOCK_AI_FALLBACK:
             raise ValueError("AI_PROVIDER=auto requires AI_API_KEY when ALLOW_MOCK_AI_FALLBACK is false.")
-        LAST_AI_PROVIDER_BUILD_WARNING = "AI provider fell back to MockAIProvider because AI_API_KEY is missing."
-        return MockAIProvider()
+        warning = "AI provider fell back to MockAIProvider because AI_API_KEY is missing."
+        return MockAIProvider(), warning
     raise ValueError(
         f"Unsupported AI_PROVIDER='{settings.AI_PROVIDER}'. Expected 'auto', 'mock', or 'openai'."
     )
-
-
-def get_last_ai_provider_build_warning() -> str | None:
-    return LAST_AI_PROVIDER_BUILD_WARNING
