@@ -160,4 +160,4 @@ jobs:
           kubectl apply -f k8s/api-deployment.yaml
           kubectl set image deployment/vin-pipeline-api \
             api=asia-southeast1-docker.pkg.dev/vintravel-chatbot/vin-pipeline/api:${{ github.sha }}
-          kubectl rollout status deployment/vin-pipeline-api --timeout=120s
+          kubectl rollout status deployment/vin-pipeline-api --timeout=300s
