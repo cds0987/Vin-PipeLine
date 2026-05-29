@@ -92,14 +92,18 @@ def test_mock_ocr_does_not_raise_on_empty_bytes():
 
 def test_build_returns_mock_when_provider_is_mock(monkeypatch):
     monkeypatch.setattr("config.settings.AI_PROVIDER", "mock")
-    assert isinstance(build_ai_provider(), MockAIProvider)
+    provider, warning = build_ai_provider()
+    assert isinstance(provider, MockAIProvider)
+    assert warning is None
 
 
 def test_build_auto_without_key_returns_mock(monkeypatch):
     monkeypatch.setattr("config.settings.AI_PROVIDER", "auto")
     monkeypatch.setattr("config.settings.AI_API_KEY", None)
     monkeypatch.setattr("config.settings.AI_BASE_URL", None)
-    assert isinstance(build_ai_provider(), MockAIProvider)
+    provider, warning = build_ai_provider()
+    assert isinstance(provider, MockAIProvider)
+    assert warning is not None
 
 
 def test_build_auto_with_whitespace_key_returns_mock(monkeypatch):
@@ -107,7 +111,9 @@ def test_build_auto_with_whitespace_key_returns_mock(monkeypatch):
     monkeypatch.setattr("config.settings.AI_PROVIDER", "auto")
     monkeypatch.setattr("config.settings.AI_API_KEY", "   ")
     monkeypatch.setattr("config.settings.AI_BASE_URL", None)
-    assert isinstance(build_ai_provider(), MockAIProvider)
+    provider, warning = build_ai_provider()
+    assert isinstance(provider, MockAIProvider)
+    assert warning is not None
 
 
 def test_build_unknown_provider_raises_value_error(monkeypatch):

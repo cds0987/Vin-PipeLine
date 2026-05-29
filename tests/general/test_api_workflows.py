@@ -77,7 +77,7 @@ def test_scan_endpoint_returns_queued_count(api_client, monkeypatch):
         assert len(jobs) == 2
         return len(jobs)
 
-    monkeypatch.setattr("adapters.s3_adapter.S3Scanner", FakeScanner)
+    monkeypatch.setattr("api.main.S3Scanner", FakeScanner)
     monkeypatch.setattr(api_main, "_run_jobs", fake_run_jobs)
 
     response = api_client.post("/scan", json={"bucket": "bucket-a", "prefix": "prefix-a"})

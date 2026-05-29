@@ -207,42 +207,32 @@ def test_parse_pdf_all_empty_pages_returns_empty(monkeypatch):
 
 # ─── run() extension dispatch ─────────────────────────────────────────────────
 
-def test_run_dispatches_txt_file(tmp_path):
+def test_run_dispatches_txt_file():
     from models.ingest_job import IngestJob
-    f = tmp_path / "doc.txt"
-    f.write_bytes(b"plain text document")
-    job = IngestJob(doc_id="d1", file_uri=str(f))
-    assert parse.run(job, _MockOCRProvider()) == [(1, "plain text document")]
+    job = IngestJob(doc_id="d1", file_uri="doc.txt")
+    assert parse.run(job, _MockOCRProvider(), b"plain text document") == [(1, "plain text document")]
 
 
-def test_run_dispatches_md_file(tmp_path):
+def test_run_dispatches_md_file():
     from models.ingest_job import IngestJob
-    f = tmp_path / "readme.md"
-    f.write_bytes(b"# heading\ncontent")
-    job = IngestJob(doc_id="d2", file_uri=str(f))
-    result = parse.run(job, _MockOCRProvider())
+    job = IngestJob(doc_id="d2", file_uri="readme.md")
+    result = parse.run(job, _MockOCRProvider(), b"# heading\ncontent")
     assert result == [(1, "# heading\ncontent")]
 
 
-def test_run_dispatches_html_file(tmp_path):
+def test_run_dispatches_html_file():
     from models.ingest_job import IngestJob
-    f = tmp_path / "page.html"
-    f.write_bytes(b"<p>html content</p>")
-    job = IngestJob(doc_id="d3", file_uri=str(f))
-    assert parse.run(job, _MockOCRProvider()) == [(1, "html content")]
+    job = IngestJob(doc_id="d3", file_uri="page.html")
+    assert parse.run(job, _MockOCRProvider(), b"<p>html content</p>") == [(1, "html content")]
 
 
-def test_run_dispatches_htm_file(tmp_path):
+def test_run_dispatches_htm_file():
     from models.ingest_job import IngestJob
-    f = tmp_path / "page.htm"
-    f.write_bytes(b"<p>htm content</p>")
-    job = IngestJob(doc_id="d4", file_uri=str(f))
-    assert parse.run(job, _MockOCRProvider()) == [(1, "htm content")]
+    job = IngestJob(doc_id="d4", file_uri="page.htm")
+    assert parse.run(job, _MockOCRProvider(), b"<p>htm content</p>") == [(1, "htm content")]
 
 
-def test_run_unknown_extension_falls_back_to_text(tmp_path):
+def test_run_unknown_extension_falls_back_to_text():
     from models.ingest_job import IngestJob
-    f = tmp_path / "data.xyz"
-    f.write_bytes(b"unknown but readable")
-    job = IngestJob(doc_id="d5", file_uri=str(f))
-    assert parse.run(job, _MockOCRProvider()) == [(1, "unknown but readable")]
+    job = IngestJob(doc_id="d5", file_uri="data.xyz")
+    assert parse.run(job, _MockOCRProvider(), b"unknown but readable") == [(1, "unknown but readable")]

@@ -59,9 +59,9 @@ def tmp_path():
 def api_client(monkeypatch, fake_ai_provider, vector_store, metadata_store):
     import api.main as api_main
 
-    monkeypatch.setattr(api_main, "build_ai_provider", lambda: fake_ai_provider)
-    monkeypatch.setattr(api_main, "build_vector_store", lambda: vector_store)
-    monkeypatch.setattr(api_main, "build_metadata_store", lambda: metadata_store)
+    monkeypatch.setattr(api_main, "build_ai_provider", lambda: (fake_ai_provider, None))
+    monkeypatch.setattr(api_main, "build_vector_store", lambda: (vector_store, None))
+    monkeypatch.setattr(api_main, "build_metadata_store", lambda: (metadata_store, None))
 
     with TestClient(api_main.app) as client:
         yield client

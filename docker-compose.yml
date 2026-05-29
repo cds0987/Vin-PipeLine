@@ -17,31 +17,6 @@ services:
       interval: 10s
       retries: 5
 
-  # ── Kafka ──────────────────────────────────────────────────────────────────
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.0
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-    volumes:
-      - zookeeper_data:/var/lib/zookeeper/data
-
-  kafka:
-    image: confluentinc/cp-kafka:7.6.0
-    depends_on: [zookeeper]
-    ports:
-      - "9092:9092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
-      interval: 15s
-      retries: 5
-
   # ── Metadata DB ────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
@@ -88,7 +63,6 @@ services:
       - VECTOR_STORE=qdrant
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
-      - KAFKA_BOOTSTRAP=kafka:9092
       - USE_S3=true
       - S3_BUCKET=rag-pipeline-local
       - S3_ENDPOINT=http://minio:9000
@@ -99,9 +73,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
 
+  # ── Test runner ────────────────────────────────────────────────────────────
   test:
     build:
       context: .
@@ -110,10 +83,9 @@ services:
       - AI_PROVIDER=mock
       - VECTOR_STORE=memory
       - METADATA_STORE=memory
-    command: ["pytest", "-q"]
+    command: ["pytest", "-q", "-m", "not integration"]
 
 volumes:
   minio_data:
-  zookeeper_data:
   postgres_data:
   qdrant_data:

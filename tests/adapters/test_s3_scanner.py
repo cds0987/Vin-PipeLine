@@ -42,7 +42,11 @@ def _s3_obj(key: str, last_modified: datetime | None = None) -> dict:
     return {"Key": key, "LastModified": last_modified or _ts()}
 
 
-def _scan(objects: list[dict], metadata_store: InMemoryMetadataStore | None = None) -> list:
+def _scan(
+    objects: list[dict],
+    metadata_store: InMemoryMetadataStore | None = None,
+    prefix: str = "",
+) -> list:
     """Run scanner against a faked S3 page containing *objects*."""
     store = metadata_store or InMemoryMetadataStore()
     scanner = S3Scanner(store)
@@ -52,7 +56,7 @@ def _scan(objects: list[dict], metadata_store: InMemoryMetadataStore | None = No
     fake_client.get_paginator.return_value = fake_paginator
 
     with patch("adapters.s3_adapter._s3_client", return_value=fake_client):
-        return scanner.scan(bucket="test-bucket", prefix="")
+        return scanner.scan(bucket="test-bucket", prefix=prefix)
 
 
 def _doc(doc_id: str, file_path: str, status: str,
@@ -81,13 +85,23 @@ def test_job_doc_id_equals_md5_of_uri():
 
 def test_job_metadata_contains_file_name():
     jobs = _scan([_s3_obj("raw/my_policy.pdf")])
-    assert jobs[0].metadata["file_name"] == "my_policy.pdf"
+    assert jobs[0].file_name == "my_policy.pdf"
 
 
 def test_job_carries_s3_last_modified():
     ts = _ts(2026, 3, 15)
     jobs = _scan([_s3_obj("raw/file.pdf", last_modified=ts)])
     assert jobs[0].s3_last_modified == ts
+
+
+def test_job_document_type_derived_from_first_path_segment_after_prefix():
+    jobs = _scan([_s3_obj("raw/contracts/master-service-agreement.pdf")], prefix="raw/")
+    assert jobs[0].document_type == "contracts"
+
+
+def test_job_document_type_defaults_to_general_when_file_is_at_prefix_root():
+    jobs = _scan([_s3_obj("raw/report.pdf")], prefix="raw/")
+    assert jobs[0].document_type == "general"
 
 
 # ─── Already indexed, unchanged → skip ───────────────────────────────────────

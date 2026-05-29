@@ -142,7 +142,7 @@ def test_deadline_respected_after_parse(tmp_path, monkeypatch):
 
     class _SlowParse:
         @staticmethod
-        def run(j, ai):
+        def run(j, ai, file_bytes):
             return [(1, "parsed content")]
 
     monkeypatch.setattr(run_mod, "parse", _SlowParse)

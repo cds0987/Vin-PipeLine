@@ -12,7 +12,7 @@ index = importlib.import_module("pipeline.05_index")
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 def _job(doc_id: str = "doc-idx", file_uri: str = "s3://bucket/file.pdf") -> IngestJob:
-    return IngestJob(doc_id=doc_id, file_uri=file_uri, metadata={"file_name": "file.pdf"})
+    return IngestJob(doc_id=doc_id, file_uri=file_uri, file_name="file.pdf")
 
 
 def _chunks(doc_id: str, n: int = 3) -> list[ChunkResult]:
@@ -79,7 +79,7 @@ def test_index_deletes_old_vectors_before_reingest():
 # ─── DocumentRecord fields inferred correctly ─────────────────────────────────
 
 def test_index_infers_file_name_from_uri_when_metadata_missing():
-    job = IngestJob(doc_id="doc-fname", file_uri="s3://bucket/reports/annual.pdf", metadata={})
+    job = IngestJob(doc_id="doc-fname", file_uri="s3://bucket/reports/annual.pdf")
     metadata_store = InMemoryMetadataStore()
     index.run(_chunks(job.doc_id), job, InMemoryVectorStore(), metadata_store)
     assert metadata_store.get_document(job.doc_id).file_name == "annual.pdf"
@@ -89,7 +89,7 @@ def test_index_prefers_file_name_from_metadata_over_uri():
     job = IngestJob(
         doc_id="doc-fname2",
         file_uri="s3://bucket/a1b2c3.pdf",
-        metadata={"file_name": "human_readable_name.pdf"},
+        file_name="human_readable_name.pdf",
     )
     metadata_store = InMemoryMetadataStore()
     index.run(_chunks(job.doc_id), job, InMemoryVectorStore(), metadata_store)
@@ -98,7 +98,7 @@ def test_index_prefers_file_name_from_metadata_over_uri():
 
 def test_index_sets_file_type_from_extension():
     for ext, expected in [("pdf", "pdf"), ("docx", "docx"), ("txt", "txt"), ("html", "html")]:
-        job = IngestJob(doc_id=f"doc-{ext}", file_uri=f"s3://bucket/doc.{ext}", metadata={})
+        job = IngestJob(doc_id=f"doc-{ext}", file_uri=f"s3://bucket/doc.{ext}")
         metadata_store = InMemoryMetadataStore()
         index.run(_chunks(job.doc_id), job, InMemoryVectorStore(), metadata_store)
         assert metadata_store.get_document(job.doc_id).file_type == expected
@@ -108,7 +108,7 @@ def test_index_sets_file_type_from_extension():
 
 def test_index_forwards_s3_last_modified_to_document_record():
     ts = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
-    job = IngestJob(doc_id="doc-ts", file_uri="s3://bucket/file.pdf", s3_last_modified=ts, metadata={})
+    job = IngestJob(doc_id="doc-ts", file_uri="s3://bucket/file.pdf", s3_last_modified=ts)
     metadata_store = InMemoryMetadataStore()
     index.run(_chunks(job.doc_id), job, InMemoryVectorStore(), metadata_store)
     doc = metadata_store.get_document(job.doc_id)

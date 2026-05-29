@@ -66,9 +66,9 @@ def test_search_threshold_zero_does_not_filter(monkeypatch, fake_ai_provider, ve
     from fastapi.testclient import TestClient
 
     monkeypatch.setattr("config.settings.SEARCH_SCORE_THRESHOLD", 0.0)
-    monkeypatch.setattr(api_main, "build_ai_provider", lambda: fake_ai_provider)
-    monkeypatch.setattr(api_main, "build_vector_store", lambda: vector_store)
-    monkeypatch.setattr(api_main, "build_metadata_store", lambda: metadata_store)
+    monkeypatch.setattr(api_main, "build_ai_provider", lambda: (fake_ai_provider, None))
+    monkeypatch.setattr(api_main, "build_vector_store", lambda: (vector_store, None))
+    monkeypatch.setattr(api_main, "build_metadata_store", lambda: (metadata_store, None))
 
     with TestClient(api_main.app) as client:
         job = FileAdapter().map("data/sample/policy.txt", doc_id="doc-threshold-zero")
@@ -125,7 +125,7 @@ def test_scan_returns_zero_queued_when_no_new_files(api_client, monkeypatch):
         def __init__(self, _): pass
         def scan(self, bucket=None, prefix=None): return []
 
-    monkeypatch.setattr("adapters.s3_adapter.S3Scanner", _EmptyScanner)
+    monkeypatch.setattr("api.main.S3Scanner", _EmptyScanner)
 
     body = api_client.post("/scan", json={}).json()
     assert body["status"] == "scan started"
