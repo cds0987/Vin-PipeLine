@@ -4,7 +4,6 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from models.ingest_job import PermissionModel
 from utils.stores import FileMetadataStore, InMemoryVectorStore
 
 
@@ -29,11 +28,6 @@ def vector_store() -> InMemoryVectorStore:
 @pytest.fixture
 def metadata_store(tmp_path) -> FileMetadataStore:
     return FileMetadataStore(base_dir=str(tmp_path / "store"))
-
-
-@pytest.fixture
-def public_permission() -> PermissionModel:
-    return PermissionModel(visibility="public")
 
 
 @pytest.fixture

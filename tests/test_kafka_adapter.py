@@ -13,7 +13,6 @@ def test_kafka_adapter_maps_valid_event():
             "uploaded_by": "user-1",
             "org_id": "org-1",
             "metadata": {"file_name": "file.pdf", "document_type": "policy", "language": "vi"},
-            "permission": {"visibility": "private", "owner_id": "user-1", "org_id": "org-1"},
             "timestamp": "2026-05-29T10:00:00Z",
         }
     )

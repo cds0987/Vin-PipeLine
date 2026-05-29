@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     consumer_group_id: str = "de-ingestion-service"
     consumer_max_retries: int = 3
 
+    scan_interval_seconds: int = 300   # S3 poll interval; 0 = disable background scanner
+    scan_prefix: str = ""              # S3 key prefix to scan, e.g. "raw/"
+
 
 _settings = Settings()
 
@@ -108,6 +111,8 @@ TOPIC_PERMISSION = _settings.topic_permission
 TOPIC_DLQ = _settings.topic_dlq
 CONSUMER_GROUP_ID = _settings.consumer_group_id
 CONSUMER_MAX_RETRIES = _settings.consumer_max_retries
+SCAN_INTERVAL_SECONDS = _settings.scan_interval_seconds
+SCAN_PREFIX = _settings.scan_prefix
 
 for _path in (RAW_DIR, DLQ_DIR, SAMPLE_DIR):
     _path.mkdir(parents=True, exist_ok=True)

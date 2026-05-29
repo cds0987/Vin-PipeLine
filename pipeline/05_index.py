@@ -29,15 +29,14 @@ def run(
         document_type=job.document_type,
         language=job.language,
         status="indexing",
-        uploaded_by=(job.permission.owner_id if job.permission else None),
-        org_id=(job.permission.org_id if job.permission else None),
         uploaded_at=now,
         updated_at=now,
     )
     metadata_store.upsert(record)
 
-    if job.permission:
-        metadata_store.upsert_permission(job.doc_id, job.permission)
+    # Stamp s3_uri vào mỗi chunk — Qdrant payload sẽ trả về trong search results
+    for chunk in chunks:
+        chunk.metadata["s3_uri"] = job.file_uri
 
     vector_store.upsert(chunks)
     metadata_store.upsert_chunks(chunks)
@@ -45,7 +44,6 @@ def run(
     processed_at = datetime.now(timezone.utc)
     metadata_store.update_status(job.doc_id, "indexed")
 
-    # update processed_at + total_chunks nếu store hỗ trợ (SQLMetadataStore)
     if hasattr(metadata_store, "update_processed"):
         metadata_store.update_processed(job.doc_id, len(chunks), processed_at)
 

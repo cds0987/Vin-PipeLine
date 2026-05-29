@@ -7,45 +7,37 @@ from pathlib import Path
 from typing import Protocol
 
 from config import settings
-from models.ingest_job import ChunkResult, DocumentRecord, PermissionModel
+from models.ingest_job import ChunkResult, DocumentRecord
 
 log = logging.getLogger(__name__)
 
 
 class VectorStore(Protocol):
     @abstractmethod
-    def upsert(self, chunks: list[ChunkResult]) -> None:
-        ...
+    def upsert(self, chunks: list[ChunkResult]) -> None: ...
 
     @abstractmethod
-    def search(self, vector: list[float], top_k: int, filters: dict | None = None) -> list[ChunkResult]:
-        ...
+    def search(self, vector: list[float], top_k: int, filters: dict | None = None) -> list[ChunkResult]: ...
 
     @abstractmethod
-    def delete(self, doc_id: str) -> None:
-        ...
+    def delete(self, doc_id: str) -> None: ...
 
 
 class MetadataStore(Protocol):
     @abstractmethod
-    def upsert(self, doc: DocumentRecord) -> None:
-        ...
+    def upsert(self, doc: DocumentRecord) -> None: ...
 
     @abstractmethod
-    def update_status(self, doc_id: str, status: str) -> None:
-        ...
+    def update_status(self, doc_id: str, status: str) -> None: ...
 
     @abstractmethod
-    def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None:
-        ...
+    def get_document(self, doc_id: str) -> DocumentRecord | None: ...
 
     @abstractmethod
-    def get_permission(self, doc_id: str) -> PermissionModel | None:
-        ...
+    def get_by_file_path(self, file_path: str) -> DocumentRecord | None: ...
 
     @abstractmethod
-    def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
-        ...
+    def upsert_chunks(self, chunks: list[ChunkResult]) -> None: ...
 
     @abstractmethod
     def record_job(
@@ -56,9 +48,10 @@ class MetadataStore(Protocol):
         embedding_model: str = "",
         duration_seconds: float = 0.0,
         error_message: str | None = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
+
+# ─── Vector store implementations ────────────────────────────────────────────
 
 class QdrantStore:
     def __init__(self) -> None:
@@ -81,7 +74,6 @@ class QdrantStore:
                 collection_name=self._collection,
                 vectors_config=VectorParams(size=settings.EMBEDDING_DIM, distance=Distance.COSINE),
             )
-        # Payload index on doc_id — bắt buộc trên Qdrant Cloud để filter khi delete
         self._client.create_payload_index(
             collection_name=self._collection,
             field_name="doc_id",
@@ -115,7 +107,6 @@ class QdrantStore:
         self._client.upsert(collection_name=self._collection, points=points)
 
     def search(self, vector: list[float], top_k: int, filters: dict | None = None) -> list[ChunkResult]:
-        # query_points là API mới từ qdrant-client 1.7+ (thay thế search() đã bị xóa)
         response = self._client.query_points(
             collection_name=self._collection,
             query=vector,
@@ -133,18 +124,16 @@ class QdrantStore:
             page_end = payload.pop("page_end", None)
             section = payload.pop("section", None)
             payload["score"] = hit.score
-            chunks.append(
-                ChunkResult(
-                    chunk_id=chunk_id,
-                    doc_id=doc_id,
-                    content=content,
-                    embedding=[],
-                    page_start=page_start,
-                    page_end=page_end,
-                    section=section,
-                    metadata=payload,
-                )
-            )
+            chunks.append(ChunkResult(
+                chunk_id=chunk_id,
+                doc_id=doc_id,
+                content=content,
+                embedding=[],
+                page_start=page_start,
+                page_end=page_end,
+                section=section,
+                metadata=payload,
+            ))
         return chunks
 
     def delete(self, doc_id: str) -> None:
@@ -179,8 +168,9 @@ class InMemoryVectorStore:
         return scored[:top_k]
 
     def delete(self, doc_id: str) -> None:
-        for chunk_id in [chunk_id for chunk_id, chunk in self._chunks.items() if chunk.doc_id == doc_id]:
-            del self._chunks[chunk_id]
+        to_remove = [cid for cid, c in self._chunks.items() if c.doc_id == doc_id]
+        for cid in to_remove:
+            del self._chunks[cid]
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
@@ -194,25 +184,18 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     return numerator / (left_norm * right_norm)
 
 
+# ─── Metadata store implementations ──────────────────────────────────────────
+
 class SQLMetadataStore:
     def __init__(self, db_url: str | None = None) -> None:
         from sqlalchemy import create_engine
-        from db.schema import (
-            document_chunks,
-            document_permissions,
-            documents,
-            ingestion_jobs,
-            metadata as schema_metadata,
-        )
+        from db.schema import document_chunks, documents, ingestion_jobs, metadata as schema_metadata
 
         self._engine = create_engine(db_url or settings.DB_URL, future=True)
         self._metadata = schema_metadata
         self._documents = documents
-        self._permissions = document_permissions
         self._chunks = document_chunks
         self._jobs = ingestion_jobs
-        # create_all là idempotent — tạo bảng nếu chưa có, bỏ qua nếu đã tồn tại
-        # Dùng cho dev/test fresh DB; production dùng: alembic upgrade head
         self._metadata.create_all(self._engine)
 
     def upsert(self, doc: DocumentRecord) -> None:
@@ -227,55 +210,40 @@ class SQLMetadataStore:
         from sqlalchemy import select
 
         with self._engine.begin() as conn:
-            row = conn.execute(select(self._documents).where(self._documents.c.id == doc_id)).mappings().first()
+            row = conn.execute(
+                select(self._documents).where(self._documents.c.id == doc_id)
+            ).mappings().first()
             if row is None:
+                conn.execute(self._documents.insert().values(
+                    id=doc_id, file_path="", file_name=None, file_type=None,
+                    document_type="general", language="vi", status=status,
+                    uploaded_at=datetime.now(timezone.utc),
+                    processed_at=None, updated_at=datetime.now(timezone.utc),
+                ))
+            else:
                 conn.execute(
-                    self._documents.insert().values(
-                        id=doc_id,
-                        file_path="",
-                        file_name=None,
-                        file_type=None,
-                        document_type="general",
-                        language="vi",
-                        status=status,
-                        uploaded_by=None,
-                        org_id=None,
-                        uploaded_at=datetime.now(timezone.utc),
-                        processed_at=None,
-                        updated_at=datetime.now(timezone.utc),
-                    )
+                    self._documents.update()
+                    .where(self._documents.c.id == doc_id)
+                    .values(status=status, updated_at=datetime.now(timezone.utc))
                 )
-                return
-            conn.execute(
-                self._documents.update()
-                .where(self._documents.c.id == doc_id)
-                .values(status=status, updated_at=datetime.now(timezone.utc))
-            )
 
-    def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None:
-        from sqlalchemy import delete
-
-        payload = permission.model_dump()
-        payload["doc_id"] = doc_id
-        payload["updated_at"] = datetime.now(timezone.utc)
-        with self._engine.begin() as conn:
-            conn.execute(delete(self._permissions).where(self._permissions.c.doc_id == doc_id))
-            conn.execute(self._permissions.insert().values(**payload))
-
-    def get_permission(self, doc_id: str) -> PermissionModel | None:
+    def get_document(self, doc_id: str) -> DocumentRecord | None:
         from sqlalchemy import select
 
         with self._engine.begin() as conn:
-            row = conn.execute(select(self._permissions).where(self._permissions.c.doc_id == doc_id)).mappings().first()
-        if row is None:
-            return None
-        return PermissionModel(
-            visibility=row["visibility"],
-            owner_id=row["owner_id"],
-            org_id=row["org_id"],
-            allowed_roles=list(row["allowed_roles"] or []),
-            allowed_users=list(row["allowed_users"] or []),
-        )
+            row = conn.execute(
+                select(self._documents).where(self._documents.c.id == doc_id)
+            ).mappings().first()
+        return DocumentRecord(**dict(row)) if row else None
+
+    def get_by_file_path(self, file_path: str) -> DocumentRecord | None:
+        from sqlalchemy import select
+
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                select(self._documents).where(self._documents.c.file_path == file_path)
+            ).mappings().first()
+        return DocumentRecord(**dict(row)) if row else None
 
     def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
         from sqlalchemy import delete
@@ -293,9 +261,7 @@ class SQLMetadataStore:
                 "page_start": c.page_start,
                 "page_end": c.page_end,
                 "section": c.section,
-                "token_count": (
-                    c.metadata.get("token_end", 0) - c.metadata.get("token_start", 0)
-                ) or None,
+                "token_count": (c.metadata.get("token_end", 0) - c.metadata.get("token_start", 0)) or None,
                 "created_at": now,
             }
             for i, c in enumerate(chunks)
@@ -304,43 +270,27 @@ class SQLMetadataStore:
             conn.execute(delete(self._chunks).where(self._chunks.c.doc_id == doc_id))
             conn.execute(self._chunks.insert(), rows)
 
-    def record_job(
-        self,
-        doc_id: str,
-        status: str,
-        chunk_count: int = 0,
-        embedding_model: str = "",
-        duration_seconds: float = 0.0,
-        error_message: str | None = None,
-    ) -> None:
+    def record_job(self, doc_id: str, status: str, chunk_count: int = 0,
+                   embedding_model: str = "", duration_seconds: float = 0.0,
+                   error_message: str | None = None) -> None:
         import uuid
 
         now = datetime.now(timezone.utc)
         with self._engine.begin() as conn:
-            conn.execute(
-                self._jobs.insert().values(
-                    id=str(uuid.uuid4()),
-                    doc_id=doc_id,
-                    status=status,
-                    chunk_count=chunk_count,
-                    embedding_model=embedding_model or None,
-                    duration_seconds=duration_seconds,
-                    error_message=error_message,
-                    started_at=now,
-                    finished_at=now if status in ("indexed", "failed") else None,
-                )
-            )
+            conn.execute(self._jobs.insert().values(
+                id=str(uuid.uuid4()), doc_id=doc_id, status=status,
+                chunk_count=chunk_count, embedding_model=embedding_model or None,
+                duration_seconds=duration_seconds, error_message=error_message,
+                started_at=now, finished_at=now if status in ("indexed", "failed") else None,
+            ))
 
     def update_processed(self, doc_id: str, total_chunks: int, processed_at: datetime) -> None:
         with self._engine.begin() as conn:
             conn.execute(
                 self._documents.update()
                 .where(self._documents.c.id == doc_id)
-                .values(
-                    total_chunks=total_chunks,
-                    processed_at=processed_at,
-                    updated_at=datetime.now(timezone.utc),
-                )
+                .values(total_chunks=total_chunks, processed_at=processed_at,
+                        updated_at=datetime.now(timezone.utc))
             )
 
 
@@ -349,57 +299,53 @@ class FileMetadataStore:
         self._base_dir = Path(base_dir or "data/local_store")
         self._base_dir.mkdir(parents=True, exist_ok=True)
         self._documents_file = self._base_dir / "documents.json"
-        self._permissions_file = self._base_dir / "permissions.json"
 
-    def _read_json(self, path: Path) -> dict:
-        if not path.exists():
+    def _read(self) -> dict:
+        if not self._documents_file.exists():
             return {}
         import json
+        return json.loads(self._documents_file.read_text(encoding="utf-8"))
 
-        return json.loads(path.read_text(encoding="utf-8"))
-
-    def _write_json(self, path: Path, payload: dict) -> None:
+    def _write(self, docs: dict) -> None:
         import json
-
-        path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        self._documents_file.write_text(json.dumps(docs, indent=2, default=str), encoding="utf-8")
 
     def upsert(self, doc: DocumentRecord) -> None:
-        docs = self._read_json(self._documents_file)
+        docs = self._read()
         docs[doc.id] = doc.model_dump(mode="json")
-        self._write_json(self._documents_file, docs)
+        self._write(docs)
 
     def update_status(self, doc_id: str, status: str) -> None:
-        docs = self._read_json(self._documents_file)
+        docs = self._read()
         doc = docs.get(doc_id, {})
         doc["id"] = doc_id
         doc["status"] = status
         doc["updated_at"] = datetime.now(timezone.utc).isoformat()
         docs[doc_id] = doc
-        self._write_json(self._documents_file, docs)
+        self._write(docs)
 
-    def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None:
-        permissions = self._read_json(self._permissions_file)
-        permissions[doc_id] = permission.model_dump(mode="json")
-        self._write_json(self._permissions_file, permissions)
+    def get_document(self, doc_id: str) -> DocumentRecord | None:
+        payload = self._read().get(doc_id)
+        return DocumentRecord(**payload) if payload else None
 
-    def get_permission(self, doc_id: str) -> PermissionModel | None:
-        permissions = self._read_json(self._permissions_file)
-        payload = permissions.get(doc_id)
-        return PermissionModel(**payload) if payload else None
+    def get_by_file_path(self, file_path: str) -> DocumentRecord | None:
+        for payload in self._read().values():
+            if payload.get("file_path") == file_path:
+                return DocumentRecord(**payload)
+        return None
 
     def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
-        pass  # file store used in tests only — chunks tracked in Qdrant
+        pass
 
     def record_job(self, doc_id: str, status: str, chunk_count: int = 0,
                    embedding_model: str = "", duration_seconds: float = 0.0,
                    error_message: str | None = None) -> None:
-        pass  # file store used in tests only
+        pass
 
 
 class InMemoryMetadataStore:
     def __init__(self) -> None:
         self._documents: dict[str, DocumentRecord] = {}
-        self._permissions: dict[str, PermissionModel] = {}
 
     def upsert(self, doc: DocumentRecord) -> None:
         self._documents[doc.id] = doc
@@ -410,19 +356,22 @@ class InMemoryMetadataStore:
         else:
             self._documents[doc_id] = DocumentRecord(id=doc_id, file_path="", status=status)
 
-    def upsert_permission(self, doc_id: str, permission: PermissionModel) -> None:
-        self._permissions[doc_id] = permission
+    def get_document(self, doc_id: str) -> DocumentRecord | None:
+        return self._documents.get(doc_id)
 
-    def get_permission(self, doc_id: str) -> PermissionModel | None:
-        return self._permissions.get(doc_id)
+    def get_by_file_path(self, file_path: str) -> DocumentRecord | None:
+        for doc in self._documents.values():
+            if doc.file_path == file_path:
+                return doc
+        return None
 
     def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
-        pass  # in-memory store used in tests only — chunks tracked in Qdrant
+        pass
 
     def record_job(self, doc_id: str, status: str, chunk_count: int = 0,
                    embedding_model: str = "", duration_seconds: float = 0.0,
                    error_message: str | None = None) -> None:
-        pass  # in-memory store used in tests only
+        pass
 
 
 def build_vector_store() -> VectorStore:

@@ -4,8 +4,6 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
-from models.ingest_job import PermissionModel
-
 
 class EventMetadata(BaseModel):
     file_name: str | None = None
@@ -22,7 +20,6 @@ class DocumentUploaded(BaseModel):
     uploaded_by: str
     org_id: str | None = None
     metadata: EventMetadata = Field(default_factory=EventMetadata)
-    permission: PermissionModel | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

@@ -11,11 +11,11 @@ Thêm column / table mới ở đây → chạy:
 from __future__ import annotations
 
 from sqlalchemy import (
-    JSON,
     Column,
     DateTime,
     Float,
     Integer,
+    JSON,
     MetaData,
     String,
     Table,
@@ -36,23 +36,9 @@ documents = Table(
     Column("description", Text),
     Column("language", String, nullable=False, server_default="vi"),
     Column("status", String, nullable=False, server_default="pending"),
-    Column("uploaded_by", String),
-    Column("org_id", String),
     Column("total_chunks", Integer),
     Column("uploaded_at", DateTime, nullable=False),
     Column("processed_at", DateTime),
-    Column("updated_at", DateTime, nullable=False),
-)
-
-document_permissions = Table(
-    "document_permissions",
-    metadata,
-    Column("doc_id", String, primary_key=True),
-    Column("visibility", String, nullable=False, server_default="private"),
-    Column("owner_id", String),
-    Column("org_id", String),
-    Column("allowed_roles", JSON, nullable=False, server_default="[]"),
-    Column("allowed_users", JSON, nullable=False, server_default="[]"),
     Column("updated_at", DateTime, nullable=False),
 )
 

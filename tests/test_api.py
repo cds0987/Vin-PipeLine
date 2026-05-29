@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from adapters.file_adapter import FileAdapter
-from models.ingest_job import PermissionModel
 from pipeline.run import run
 
 
@@ -13,51 +12,51 @@ def test_health_endpoint(api_client):
     assert body["status"] == "ok"
     assert "vector_store" in body
     assert "ai_provider" in body
+    assert "scanner" in body
 
 
-def test_retrieve_context_endpoint(api_client, fake_ai_provider, vector_store, metadata_store):
+def test_search_endpoint_returns_results(api_client, fake_ai_provider, vector_store, metadata_store):
     job = FileAdapter().map("data/sample/policy.txt", doc_id="doc-api")
-    job.permission = PermissionModel(visibility="public")
     run(job, ai_provider=fake_ai_provider, vector_store=vector_store, metadata_store=metadata_store)
 
-    response = api_client.post(
-        "/retrieve-context",
-        json={
-            "query": "travel reimbursement",
-            "user_id": "user-1",
-            "user_roles": [],
-            "org_id": None,
-            "top_k": 3,
-        },
-    )
+    response = api_client.post("/search", json={"query": "travel reimbursement", "top_k": 3})
 
     assert response.status_code == 200
     body = response.json()
-    assert body["contexts"]
-    assert body["contexts"][0]["source"] == "doc-api"
+    assert "results" in body
+    assert "request_id" in body
+    assert body["results"]
+    first = body["results"][0]
+    assert "chunk_id" in first
+    assert "content" in first
+    assert "score" in first
+    assert "s3_uri" in first
 
 
-def test_ingest_endpoint_publishes_event(api_client, monkeypatch):
-    published = []
+def test_search_returns_s3_uri(api_client, fake_ai_provider, vector_store, metadata_store):
+    job = FileAdapter().map("data/sample/policy.txt", doc_id="doc-s3uri")
+    run(job, ai_provider=fake_ai_provider, vector_store=vector_store, metadata_store=metadata_store)
 
-    def fake_notify(topic, payload):
-        published.append((topic, payload))
-
-    monkeypatch.setattr("api.main.notify", fake_notify)
-
-    response = api_client.post(
-        "/ingest",
-        json={
-            "doc_id": "doc-api-ingest",
-            "file_uri": "s3://bucket/policy.pdf",
-            "uploaded_by": "user-1",
-            "org_id": "org-1",
-            "metadata": {"file_name": "policy.pdf", "language": "vi"},
-            "permission": {"visibility": "private", "owner_id": "user-1", "org_id": "org-1"},
-        },
-    )
+    response = api_client.post("/search", json={"query": "policy"})
 
     assert response.status_code == 200
-    assert response.json() == {"doc_id": "doc-api-ingest", "status": "queued"}
-    assert len(published) == 1
-    assert published[0][0] == "DocumentUploaded"
+    results = response.json()["results"]
+    assert results
+    assert results[0]["s3_uri"] == "data/sample/policy.txt"
+
+
+def test_status_endpoint_returns_document(api_client, fake_ai_provider, vector_store, metadata_store):
+    job = FileAdapter().map("data/sample/policy.txt", doc_id="doc-status")
+    run(job, ai_provider=fake_ai_provider, vector_store=vector_store, metadata_store=metadata_store)
+
+    response = api_client.get("/status/doc-status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["doc_id"] == "doc-status"
+    assert body["status"] == "indexed"
+
+
+def test_status_endpoint_404_for_unknown(api_client):
+    response = api_client.get("/status/nonexistent-doc")
+    assert response.status_code == 404
