@@ -48,7 +48,7 @@ class QdrantStore:
     def __init__(self) -> None:
         import uuid as _uuid
         from qdrant_client import QdrantClient
-        from qdrant_client.models import Distance, VectorParams
+        from qdrant_client.models import Distance, PayloadSchemaType, VectorParams
 
         self._uuid = _uuid
         qdrant_url = settings.QDRANT_URL or None
@@ -65,6 +65,12 @@ class QdrantStore:
                 collection_name=self._collection,
                 vectors_config=VectorParams(size=settings.EMBEDDING_DIM, distance=Distance.COSINE),
             )
+        # Payload index on doc_id — bắt buộc trên Qdrant Cloud để filter khi delete
+        self._client.create_payload_index(
+            collection_name=self._collection,
+            field_name="doc_id",
+            field_schema=PayloadSchemaType.KEYWORD,
+        )
 
     def _point_id(self, chunk_id: str) -> str:
         return str(self._uuid.uuid5(self._uuid.NAMESPACE_DNS, chunk_id))
@@ -93,15 +99,16 @@ class QdrantStore:
         self._client.upsert(collection_name=self._collection, points=points)
 
     def search(self, vector: list[float], top_k: int, filters: dict | None = None) -> list[ChunkResult]:
-        hits = self._client.search(
+        # query_points là API mới từ qdrant-client 1.7+ (thay thế search() đã bị xóa)
+        response = self._client.query_points(
             collection_name=self._collection,
-            query_vector=vector,
+            query=vector,
             limit=top_k,
             with_payload=True,
             with_vectors=False,
         )
         chunks: list[ChunkResult] = []
-        for hit in hits:
+        for hit in response.points:
             payload = dict(hit.payload or {})
             chunk_id = payload.pop("chunk_id")
             doc_id = payload.pop("doc_id")
