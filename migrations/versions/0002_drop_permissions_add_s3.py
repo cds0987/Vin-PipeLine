@@ -1,7 +1,7 @@
-"""drop_document_permissions_add_s3_scanner_config
+"""drop_permissions_add_s3
 
-Revision ID: c3ba9fa6409d
-Revises: db994690f60c
+Revision ID: 0002
+Revises: 0001
 Create Date: 2026-05-29
 
 DE refactored to pure vector search engine:
@@ -13,8 +13,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "c3ba9fa6409d"
-down_revision: Union[str, Sequence[str], None] = "db994690f60c"
+revision: str = "0002"
+down_revision: Union[str, Sequence[str], None] = "0001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

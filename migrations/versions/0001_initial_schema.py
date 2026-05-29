@@ -1,13 +1,13 @@
 """initial_schema
 
-Revision ID: db994690f60c
+Revision ID: 0001
 Revises:
 Create Date: 2026-05-29
 
 Tạo toàn bộ schema ban đầu cho DE Ingestion Service:
   - documents
-  - document_permissions
-  - document_chunks
+  - document_permissions (dropped in 0002)
+  - document_chunks (dropped in 0005)
   - ingestion_jobs
 """
 from typing import Sequence, Union
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "db994690f60c"
+revision: str = "0001"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

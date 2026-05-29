@@ -1,7 +1,7 @@
-"""add_s3_last_modified_to_documents
+"""add_s3_last_modified
 
-Revision ID: a1f3c8d20e47
-Revises: c3ba9fa6409d
+Revision ID: 0003
+Revises: 0002
 Create Date: 2026-05-29
 
 Store the S3 LastModified timestamp so the scanner can detect file changes
@@ -13,8 +13,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "a1f3c8d20e47"
-down_revision: Union[str, Sequence[str], None] = "c3ba9fa6409d"
+revision: str = "0003"
+down_revision: Union[str, Sequence[str], None] = "0002"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
