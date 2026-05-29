@@ -131,6 +131,10 @@ QDRANT_URL có giá trị?
 
 > Xóa hoặc bỏ trống `QDRANT_URL` để switch về local — không cần đổi code.
 
+**Lưu ý kỹ thuật — `QdrantStore` implementation:**
+- Search dùng `client.query_points()` (API từ qdrant-client ≥ 1.7; `client.search()` đã bị xóa)
+- Payload index trên field `doc_id` được tạo tự động khi khởi tạo — **bắt buộc** trên Qdrant Cloud để filter trong `delete()`; idempotent nếu index đã tồn tại
+
 ---
 
 ## Store Adapters — đổi DB không đổi pipeline
