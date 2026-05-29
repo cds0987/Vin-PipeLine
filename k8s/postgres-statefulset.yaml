@@ -24,6 +24,8 @@ spec:
               value: rag
             - name: POSTGRES_DB
               value: ragdb
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           ports:
             - containerPort: 5432
           volumeMounts:
