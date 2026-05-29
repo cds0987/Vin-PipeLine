@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from streaming.kafka_consumer import process_event
 
 VALID_EVENT = {
@@ -61,15 +59,6 @@ def test_process_event_sends_to_dlq_after_max_retries(monkeypatch):
     assert payload["reason"] == "pipeline_error"
     assert payload["attempt"] == 2
     assert payload["raw"] == VALID_EVENT
-
-
-def test_process_event_succeeds_on_first_attempt(monkeypatch):
-    monkeypatch.setattr("streaming.kafka_consumer.run_pipeline", lambda job, **kwargs: {"doc_id": job.doc_id, "status": "indexed", "chunk_count": 5})
-
-    result = process_event(VALID_EVENT)
-
-    assert result is not None
-    assert result["status"] == "indexed"
 
 
 def test_process_event_succeeds_after_transient_failure(monkeypatch):

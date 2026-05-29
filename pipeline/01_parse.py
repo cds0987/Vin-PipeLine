@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from pathlib import Path
 
+from config import settings
 from models.ingest_job import IngestJob
 from utils.ai_provider import AIProvider
 from utils.storage import read_binary
@@ -12,8 +14,19 @@ class _HTMLTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.parts: list[str] = []
+        self._ignored_tag_stack: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag.lower() in {"script", "style"}:
+            self._ignored_tag_stack.append(tag.lower())
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._ignored_tag_stack and self._ignored_tag_stack[-1] == tag.lower():
+            self._ignored_tag_stack.pop()
 
     def handle_data(self, data: str) -> None:
+        if self._ignored_tag_stack:
+            return
         stripped = data.strip()
         if stripped:
             self.parts.append(stripped)
@@ -40,7 +53,7 @@ def _parse_pdf(file_bytes: bytes, ai_provider: AIProvider) -> list[tuple[int, st
             if rendered_document is None or fitz is None:
                 return None
             pixmap = rendered_document.load_page(page_index).get_pixmap(
-                matrix=fitz.Matrix(2, 2),
+                matrix=fitz.Matrix(settings.PDF_RENDER_SCALE, settings.PDF_RENDER_SCALE),
                 alpha=False,
             )
             return pixmap.tobytes("png")
@@ -64,18 +77,42 @@ def _parse_pdf(file_bytes: bytes, ai_provider: AIProvider) -> list[tuple[int, st
 
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
-        pages: list[tuple[int, str]] = []
+        if getattr(reader, "is_encrypted", False):
+            raise ValueError("Password-protected PDF is not supported.")
+
+        extracted_pages: list[tuple[int, str]] = []
+        pending_ocr: list[tuple[int, bytes | None, object]] = []
         for page_num, page in enumerate(reader.pages, start=1):
             text = (page.extract_text() or "").strip()
-            if not text:
-                rendered_page = _render_pdf_page_as_png(page_num - 1)
-                if rendered_page:
-                    text = _ocr_page_image_bytes(rendered_page)
-                if not text:
-                    text = _ocr_page_images(page)
             if text:
-                pages.append((page_num, text))
-        return pages
+                extracted_pages.append((page_num, text))
+                continue
+            pending_ocr.append((page_num, _render_pdf_page_as_png(page_num - 1), page))
+
+        if not pending_ocr:
+            return extracted_pages
+
+        ocr_results: dict[int, str] = {}
+        with ThreadPoolExecutor(max_workers=settings.PDF_OCR_MAX_WORKERS) as pool:
+            future_map = {}
+            for page_num, rendered_page, _page in pending_ocr:
+                if rendered_page:
+                    future_map[pool.submit(_ocr_page_image_bytes, rendered_page)] = page_num
+            for future, page_num in future_map.items():
+                try:
+                    ocr_results[page_num] = future.result().strip()
+                except Exception:
+                    ocr_results[page_num] = ""
+
+        for page_num, _rendered_page, page in pending_ocr:
+            text = ocr_results.get(page_num, "")
+            if not text:
+                text = _ocr_page_images(page)
+            if text:
+                extracted_pages.append((page_num, text))
+
+        extracted_pages.sort(key=lambda item: item[0])
+        return extracted_pages
     finally:
         if rendered_document is not None:
             rendered_document.close()

@@ -18,12 +18,16 @@ _ENCODER = _get_encoder()
 def _tokenize(text: str) -> list[int]:
     if _ENCODER is not None:
         return _ENCODER.encode(text)
+    if not settings.ALLOW_TOKENIZER_FALLBACK:
+        raise RuntimeError("tiktoken encoder unavailable and ALLOW_TOKENIZER_FALLBACK is false.")
     return list(range(len(text.split())))
 
 
 def _decode(token_ids: list[int]) -> str:
     if _ENCODER is not None:
         return _ENCODER.decode(token_ids)
+    if not settings.ALLOW_TOKENIZER_FALLBACK:
+        raise RuntimeError("tiktoken encoder unavailable and ALLOW_TOKENIZER_FALLBACK is false.")
     return " ".join(str(t) for t in token_ids)
 
 

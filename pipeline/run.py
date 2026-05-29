@@ -31,6 +31,8 @@ def run(
     vectors = vector_store or build_vector_store()
     metadata = metadata_store or build_metadata_store()
     try:
+        if not metadata.try_claim_ingest(job):
+            return {"doc_id": job.doc_id, "status": "skipped", "chunk_count": 0}
         _check_deadline("parse")
         pages = parse.run(job, ai)
         _check_deadline("clean")

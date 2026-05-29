@@ -21,9 +21,17 @@ class Settings(BaseSettings):
     vision_model: str = "gpt-4o"
     embedding_dim: int = 1536
     ai_request_timeout_seconds: float = 60.0
+    embed_max_retries: int = 3
+    embed_retry_backoff_seconds: float = 1.0
+    ocr_max_retries: int = 2
+    ocr_retry_backoff_seconds: float = 1.0
+    allow_mock_ai_fallback: bool = True
+    pdf_render_scale: float = 1.5
+    pdf_ocr_max_workers: int = 4
 
     chunk_size: int = 512
     chunk_overlap: int = 64
+    allow_tokenizer_fallback: bool = False
 
     vector_store: str = "qdrant"
     qdrant_host: str = "qdrant"
@@ -55,8 +63,16 @@ class Settings(BaseSettings):
     scan_prefix: str = ""              # S3 key prefix to scan, e.g. "raw/"
     scan_max_workers: int = 4          # max concurrent pipeline workers per scan cycle
     scan_job_timeout_seconds: int = 900  # max wall-clock seconds per ingest job; 0 = disable
+    stale_indexing_seconds: int = 3600
 
     search_score_threshold: float = 0.5  # minimum cosine similarity; 0.0 = disabled
+    search_query_max_length: int = 2000
+    search_query_cache_size: int = 256
+
+    max_file_size_bytes: int = 200 * 1024 * 1024
+    local_file_root: str | None = None
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
 
 
 _settings = Settings()
@@ -66,6 +82,7 @@ DATA_DIR = BASE_DIR / "data"
 RAW_DIR = DATA_DIR / "raw"
 DLQ_DIR = DATA_DIR / "dlq"
 SAMPLE_DIR = DATA_DIR / "sample"
+LOCAL_FILE_ROOT = Path(_settings.local_file_root).resolve() if _settings.local_file_root else BASE_DIR.resolve()
 
 
 def get_path(layer: str) -> str:
@@ -89,9 +106,17 @@ EMBED_MODEL = _settings.embed_model
 VISION_MODEL = _settings.vision_model
 EMBEDDING_DIM = _settings.embedding_dim
 AI_REQUEST_TIMEOUT_SECONDS = _settings.ai_request_timeout_seconds
+EMBED_MAX_RETRIES = _settings.embed_max_retries
+EMBED_RETRY_BACKOFF_SECONDS = _settings.embed_retry_backoff_seconds
+OCR_MAX_RETRIES = _settings.ocr_max_retries
+OCR_RETRY_BACKOFF_SECONDS = _settings.ocr_retry_backoff_seconds
+ALLOW_MOCK_AI_FALLBACK = _settings.allow_mock_ai_fallback
+PDF_RENDER_SCALE = _settings.pdf_render_scale
+PDF_OCR_MAX_WORKERS = _settings.pdf_ocr_max_workers
 
 CHUNK_SIZE = _settings.chunk_size
 CHUNK_OVERLAP = _settings.chunk_overlap
+ALLOW_TOKENIZER_FALLBACK = _settings.allow_tokenizer_fallback
 
 VECTOR_STORE = _settings.vector_store
 QDRANT_HOST = _settings.qdrant_host
@@ -121,7 +146,50 @@ SCAN_INTERVAL_SECONDS = _settings.scan_interval_seconds
 SCAN_PREFIX = _settings.scan_prefix
 SCAN_MAX_WORKERS = _settings.scan_max_workers
 SCAN_JOB_TIMEOUT_SECONDS = _settings.scan_job_timeout_seconds
+STALE_INDEXING_SECONDS = _settings.stale_indexing_seconds
 SEARCH_SCORE_THRESHOLD = _settings.search_score_threshold
+SEARCH_QUERY_MAX_LENGTH = _settings.search_query_max_length
+SEARCH_QUERY_CACHE_SIZE = _settings.search_query_cache_size
+MAX_FILE_SIZE_BYTES = _settings.max_file_size_bytes
+DB_POOL_SIZE = _settings.db_pool_size
+DB_MAX_OVERFLOW = _settings.db_max_overflow
+
+
+def validate_runtime_settings() -> None:
+    if EMBEDDING_DIM <= 0:
+        raise ValueError("EMBEDDING_DIM must be greater than 0.")
+    if CHUNK_SIZE <= 0:
+        raise ValueError("CHUNK_SIZE must be greater than 0.")
+    if CHUNK_OVERLAP < 0:
+        raise ValueError("CHUNK_OVERLAP must be greater than or equal to 0.")
+    if CHUNK_OVERLAP >= CHUNK_SIZE:
+        raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
+    if SCAN_MAX_WORKERS <= 0:
+        raise ValueError("SCAN_MAX_WORKERS must be greater than 0.")
+    if SEARCH_SCORE_THRESHOLD < 0.0 or SEARCH_SCORE_THRESHOLD > 1.0:
+        raise ValueError("SEARCH_SCORE_THRESHOLD must be between 0.0 and 1.0.")
+    if SEARCH_QUERY_MAX_LENGTH <= 0:
+        raise ValueError("SEARCH_QUERY_MAX_LENGTH must be greater than 0.")
+    if SEARCH_QUERY_CACHE_SIZE <= 0:
+        raise ValueError("SEARCH_QUERY_CACHE_SIZE must be greater than 0.")
+    if MAX_FILE_SIZE_BYTES <= 0:
+        raise ValueError("MAX_FILE_SIZE_BYTES must be greater than 0.")
+    if STALE_INDEXING_SECONDS < 0:
+        raise ValueError("STALE_INDEXING_SECONDS must be greater than or equal to 0.")
+    if EMBED_MAX_RETRIES <= 0:
+        raise ValueError("EMBED_MAX_RETRIES must be greater than 0.")
+    if OCR_MAX_RETRIES <= 0:
+        raise ValueError("OCR_MAX_RETRIES must be greater than 0.")
+    if PDF_RENDER_SCALE <= 0:
+        raise ValueError("PDF_RENDER_SCALE must be greater than 0.")
+    if PDF_OCR_MAX_WORKERS <= 0:
+        raise ValueError("PDF_OCR_MAX_WORKERS must be greater than 0.")
+    if EMBED_RETRY_BACKOFF_SECONDS < 0 or OCR_RETRY_BACKOFF_SECONDS < 0:
+        raise ValueError("Retry backoff values must be greater than or equal to 0.")
+    if not LOCAL_FILE_ROOT.exists():
+        raise ValueError(f"LOCAL_FILE_ROOT does not exist: {LOCAL_FILE_ROOT}")
 
 for _path in (RAW_DIR, DLQ_DIR, SAMPLE_DIR):
     _path.mkdir(parents=True, exist_ok=True)
+
+validate_runtime_settings()

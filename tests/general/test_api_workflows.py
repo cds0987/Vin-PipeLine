@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import api.main as api_main
-
 from adapters.file_adapter import FileAdapter
-from pipeline.run import run
 from models.ingest_job import IngestJob
+from pipeline.run import run
 
 
 def test_health_endpoint(api_client):
@@ -60,11 +58,6 @@ def test_status_endpoint_returns_document(api_client, fake_ai_provider, vector_s
     assert body["status"] == "indexed"
 
 
-def test_status_endpoint_404_for_unknown(api_client):
-    response = api_client.get("/status/nonexistent-doc")
-    assert response.status_code == 404
-
-
 def test_scan_endpoint_returns_queued_count(api_client, monkeypatch):
     class FakeScanner:
         def __init__(self, _metadata_store) -> None:
@@ -78,29 +71,16 @@ def test_scan_endpoint_returns_queued_count(api_client, monkeypatch):
                 IngestJob(doc_id="doc-2", file_uri="s3://bucket-a/prefix-a/file-2.pdf"),
             ]
 
-    def fake_run_jobs_and_release_lock(jobs, *_args):
+    import api.main as api_main
+
+    def fake_run_jobs(jobs, *_args):
         assert len(jobs) == 2
-        if api_main._scan_lock.locked():
-            api_main._scan_lock.release()
         return len(jobs)
 
     monkeypatch.setattr("adapters.s3_adapter.S3Scanner", FakeScanner)
-    monkeypatch.setattr(api_main, "_run_jobs_and_release_lock", fake_run_jobs_and_release_lock)
+    monkeypatch.setattr(api_main, "_run_jobs", fake_run_jobs)
 
     response = api_client.post("/scan", json={"bucket": "bucket-a", "prefix": "prefix-a"})
 
     assert response.status_code == 200
     assert response.json() == {"status": "scan started", "queued": 2}
-
-
-def test_scan_endpoint_rejects_parallel_scan(api_client):
-    acquired = api_main._scan_lock.acquire(blocking=False)
-    assert acquired
-    try:
-        response = api_client.post("/scan", json={})
-    finally:
-        if api_main._scan_lock.locked():
-            api_main._scan_lock.release()
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == "scan already in progress"

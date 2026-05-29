@@ -37,11 +37,9 @@ def test_chunk_page_tracking(monkeypatch):
     chunks = chunk_module.run(pages, job)
 
     assert chunks
-    # All chunks must have page_start and page_end populated (not None)
     for chunk in chunks:
         assert chunk.page_start is not None
         assert chunk.page_end is not None
-    # First chunk should start at page 1
     assert chunks[0].page_start == 1
 
 

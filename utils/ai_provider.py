@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import time
 from typing import Any, Protocol
 
 from config import settings
 
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+LAST_AI_PROVIDER_BUILD_WARNING: str | None = None
 
 
 class AIProvider(Protocol):
@@ -43,27 +45,43 @@ class OpenAIProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        response = self._client.embeddings.create(model=self._embed_model, input=texts)
-        return [item.embedding for item in response.data]
+        attempts = max(1, settings.EMBED_MAX_RETRIES)
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self._client.embeddings.create(model=self._embed_model, input=texts)
+                return [item.embedding for item in response.data]
+            except Exception:
+                if attempt == attempts:
+                    raise
+                time.sleep(settings.EMBED_RETRY_BACKOFF_SECONDS * attempt)
+        return []
 
     def ocr(self, image_bytes: bytes) -> str:
+        attempts = max(1, settings.OCR_MAX_RETRIES)
         b64_image = base64.b64encode(image_bytes).decode("utf-8")
-        response = self._client.chat.completions.create(
-            model=self._vision_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._vision_model,
+                    messages=[
                         {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b64_image}"},
-                        },
-                        {"type": "text", "text": "Extract all text from this image."},
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/png;base64,{b64_image}"},
+                                },
+                                {"type": "text", "text": "Extract all text from this image."},
+                            ],
+                        }
                     ],
-                }
-            ],
-        )
-        return response.choices[0].message.content or ""
+                )
+                return response.choices[0].message.content or ""
+            except Exception:
+                if attempt == attempts:
+                    raise
+                time.sleep(settings.OCR_RETRY_BACKOFF_SECONDS * attempt)
+        return ""
 
 
 class MockAIProvider:
@@ -97,9 +115,11 @@ def _normalize_optional_value(value: str | None) -> str | None:
 
 
 def build_ai_provider() -> AIProvider:
+    global LAST_AI_PROVIDER_BUILD_WARNING
     provider_name = (settings.AI_PROVIDER or "auto").lower()
     base_url = _normalize_optional_value(settings.AI_BASE_URL)
     api_key = _normalize_optional_value(settings.AI_API_KEY)
+    LAST_AI_PROVIDER_BUILD_WARNING = None
 
     if provider_name == "mock":
         return MockAIProvider()
@@ -108,7 +128,14 @@ def build_ai_provider() -> AIProvider:
     if provider_name == "auto":
         if api_key:
             return OpenAIProvider(base_url=base_url, api_key=api_key)
+        if not settings.ALLOW_MOCK_AI_FALLBACK:
+            raise ValueError("AI_PROVIDER=auto requires AI_API_KEY when ALLOW_MOCK_AI_FALLBACK is false.")
+        LAST_AI_PROVIDER_BUILD_WARNING = "AI provider fell back to MockAIProvider because AI_API_KEY is missing."
         return MockAIProvider()
     raise ValueError(
         f"Unsupported AI_PROVIDER='{settings.AI_PROVIDER}'. Expected 'auto', 'mock', or 'openai'."
     )
+
+
+def get_last_ai_provider_build_warning() -> str | None:
+    return LAST_AI_PROVIDER_BUILD_WARNING

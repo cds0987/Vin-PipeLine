@@ -17,6 +17,8 @@ def run(
     duration_seconds: float = 0.0,
 ) -> dict:
     now = datetime.now(timezone.utc)
+    existing = metadata_store.get_document(job.doc_id)
+    uploaded_at = existing.uploaded_at if existing and existing.uploaded_at else now
 
     vector_store.delete(job.doc_id)
     metadata_store.update_status(job.doc_id, "indexing")
@@ -30,7 +32,8 @@ def run(
         language=job.language,
         status="indexing",
         s3_last_modified=job.s3_last_modified,
-        uploaded_at=now,
+        uploaded_at=uploaded_at,
+        processed_at=existing.processed_at if existing else None,
         updated_at=now,
     )
     metadata_store.upsert(record)

@@ -8,13 +8,21 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
 
 from config import settings
 from pipeline.run import run as run_pipeline
 from retrieval.service import RetrievalService
-from utils.ai_provider import build_ai_provider
-from utils.stores import MetadataStore, VectorStore, build_metadata_store, build_vector_store
+from utils.ai_provider import MockAIProvider, build_ai_provider, get_last_ai_provider_build_warning
+from utils.stores import (
+    MetadataStore,
+    VectorStore,
+    build_metadata_store,
+    build_vector_store,
+    get_last_metadata_store_build_warning,
+    get_last_vector_store_build_warning,
+)
 
 log = logging.getLogger(__name__)
 
@@ -23,8 +31,16 @@ _scan_lock = threading.Lock()
 
 
 class SearchRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=settings.SEARCH_QUERY_MAX_LENGTH)
     top_k: int = Field(default=5, ge=1, le=50)
+
+    @field_validator("query")
+    @classmethod
+    def _validate_query(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("query must not be blank")
+        return stripped
 
 
 class ScanRequest(BaseModel):
@@ -46,7 +62,7 @@ def _run_single_job(job, ai_provider, vector_store: VectorStore, metadata_store:
 
 
 def _run_jobs(jobs, ai_provider, vector_store: VectorStore, metadata_store: MetadataStore) -> int:
-    """Run a pre-computed job list while the scan lock is already held."""
+    """Run a pre-computed job list with per-job claiming handled inside the pipeline."""
     ran = 0
     if not jobs:
         return ran
@@ -65,18 +81,12 @@ def _run_jobs(jobs, ai_provider, vector_store: VectorStore, metadata_store: Meta
         for future in as_completed(futures):
             job = futures[future]
             try:
-                future.result()
-                ran += 1
+                result = future.result()
+                if result.get("status") != "skipped":
+                    ran += 1
             except Exception as exc:
                 log.error("Pipeline failed doc_id=%s: %s", job.doc_id, exc)
     return ran
-
-
-def _run_jobs_and_release_lock(jobs, ai_provider, vector_store: VectorStore, metadata_store: MetadataStore) -> int:
-    try:
-        return _run_jobs(jobs, ai_provider, vector_store, metadata_store)
-    finally:
-        _scan_lock.release()
 
 
 def _scan_and_run_once(ai_provider, vector_store: VectorStore, metadata_store: MetadataStore) -> int:
@@ -88,9 +98,9 @@ def _scan_and_run_once(ai_provider, vector_store: VectorStore, metadata_store: M
 
     try:
         jobs = S3Scanner(metadata_store).scan()
-        return _run_jobs(jobs, ai_provider, vector_store, metadata_store)
     finally:
         _scan_lock.release()
+    return _run_jobs(jobs, ai_provider, vector_store, metadata_store)
 
 
 def _scanner_loop(ai_provider, vector_store: VectorStore, metadata_store: MetadataStore) -> None:
@@ -116,6 +126,15 @@ async def lifespan(app: FastAPI):
     app.state.ai_provider = build_ai_provider()
     app.state.vector_store = build_vector_store()
     app.state.metadata_store = build_metadata_store()
+    app.state.degraded_reasons = [
+        reason
+        for reason in (
+            get_last_ai_provider_build_warning(),
+            get_last_vector_store_build_warning(),
+            get_last_metadata_store_build_warning(),
+        )
+        if reason
+    ]
     app.state.retrieval_service = RetrievalService(
         ai_provider=app.state.ai_provider,
         vector_store=app.state.vector_store,
@@ -158,13 +177,15 @@ def trigger_scan(request: ScanRequest, background_tasks: BackgroundTasks):
     except Exception:
         _scan_lock.release()
         raise
+    finally:
+        if _scan_lock.locked():
+            _scan_lock.release()
 
     if not jobs:
-        _scan_lock.release()
         return {"status": "scan started", "queued": 0}
 
     background_tasks.add_task(
-        _run_jobs_and_release_lock,
+        _run_jobs,
         jobs,
         app.state.ai_provider,
         app.state.vector_store,
@@ -191,9 +212,17 @@ def get_status(doc_id: str):
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "vector_store": settings.VECTOR_STORE,
+    degraded_reasons = list(app.state.degraded_reasons)
+    if isinstance(app.state.ai_provider, MockAIProvider) and settings.AI_PROVIDER == "auto" and not settings.AI_API_KEY:
+        degraded_reasons.append("AI provider is running in mock fallback mode.")
+
+    status = "degraded" if degraded_reasons else "ok"
+    payload = {
+        "status": status,
+        "vector_store": app.state.vector_store.__class__.__name__,
+        "metadata_store": app.state.metadata_store.__class__.__name__,
         "ai_provider": app.state.ai_provider.__class__.__name__,
         "scanner": "enabled" if (settings.USE_S3 and settings.SCAN_INTERVAL_SECONDS > 0) else "disabled",
+        "degraded_reasons": degraded_reasons,
     }
+    return JSONResponse(status_code=200 if status == "ok" else 503, content=payload)

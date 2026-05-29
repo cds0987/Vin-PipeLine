@@ -8,23 +8,9 @@ import types
 parse_module = importlib.import_module("pipeline.01_parse")
 
 
-class _FakeImage:
-    def __init__(self, data: bytes) -> None:
-        self.data = data
-
-
-class _FakePage:
-    def __init__(self, text: str = "", images: list[_FakeImage] | None = None) -> None:
-        self._text = text
-        self.images = images or []
-
-    def extract_text(self) -> str:
-        return self._text
-
-
 class _FakeReader:
     def __init__(self, *_args, **_kwargs) -> None:
-        self.pages = [_FakePage("")]
+        self.pages = [types.SimpleNamespace(extract_text=lambda: "", images=[])]
 
 
 class _OCRProvider:
@@ -48,10 +34,14 @@ def test_parse_pdf_falls_back_to_rendered_page_ocr(monkeypatch):
         ),
         close=lambda: None,
     )
-    monkeypatch.setitem(sys.modules, "fitz", types.SimpleNamespace(
-        Matrix=lambda *_args: object(),
-        open=lambda **_kwargs: fake_document,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "fitz",
+        types.SimpleNamespace(
+            Matrix=lambda *_args: object(),
+            open=lambda **_kwargs: fake_document,
+        ),
+    )
 
     ai_provider = _OCRProvider()
 

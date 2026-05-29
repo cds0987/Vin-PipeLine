@@ -1,15 +1,28 @@
 from __future__ import annotations
 
+import shutil
+import uuid
+from pathlib import Path
+
 import pytest
 
 from fastapi.testclient import TestClient
 
+from config import settings
 from utils.stores import InMemoryMetadataStore, InMemoryVectorStore
 
 
 class FakeAIProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[float(len(text.split())), 1.0, 0.5] for text in texts]
+        embeddings: list[list[float]] = []
+        for text in texts:
+            base = float(len(text.split()) or 1)
+            vector = [0.0] * settings.EMBEDDING_DIM
+            vector[0] = base
+            vector[1] = 1.0
+            vector[2] = 0.5
+            embeddings.append(vector)
+        return embeddings
 
     def ocr(self, image_bytes: bytes) -> str:
         return "ocr text"
@@ -28,6 +41,18 @@ def vector_store() -> InMemoryVectorStore:
 @pytest.fixture
 def metadata_store() -> InMemoryMetadataStore:
     return InMemoryMetadataStore()
+
+
+@pytest.fixture
+def tmp_path():
+    base_root = Path(".test_tmp")
+    base_root.mkdir(parents=True, exist_ok=True)
+    path = base_root / f"case-{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture

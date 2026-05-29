@@ -1,7 +1,7 @@
 """
 Integration tests against Qdrant Cloud.
-Chỉ chạy khi có kết nối thực: pytest -m integration -v
-CI job: qdrant-integration (dùng QDRANT_URL + QDRANT_API_KEY từ GitHub Secrets)
+Only run when external connectivity is available: pytest -m integration -v
+CI job: qdrant-integration (uses QDRANT_URL + QDRANT_API_KEY from GitHub Secrets)
 """
 from __future__ import annotations
 
@@ -34,7 +34,6 @@ def store():
 
     s = QdrantStore()
     yield s
-    # teardown — xóa toàn bộ doc test khỏi collection
     for doc_id in ("ci-doc-a", "ci-doc-b"):
         try:
             s.delete(doc_id)
@@ -43,7 +42,7 @@ def store():
 
 
 def test_upsert_and_search(store):
-    chunks = [_make_chunk("ci-doc-a", 0, "Qdrant Cloud integration test — upsert")]
+    chunks = [_make_chunk("ci-doc-a", 0, "Qdrant Cloud integration test - upsert")]
     store.upsert(chunks)
 
     results = store.search(_make_embedding(0), top_k=10)
@@ -61,18 +60,18 @@ def test_search_returns_correct_fields(store):
 
 
 def test_idempotent_upsert(store):
-    updated = _make_chunk("ci-doc-a", 0, "Updated content — idempotent upsert")
+    updated = _make_chunk("ci-doc-a", 0, "Updated content - idempotent upsert")
     store.upsert([updated])
 
     results = store.search(_make_embedding(0), top_k=20)
     hits = [r for r in results if r.doc_id == "ci-doc-a"]
 
-    assert len(hits) == 1, "Upsert cùng chunk_id không được tạo duplicate"
-    assert hits[0].content == "Updated content — idempotent upsert"
+    assert len(hits) == 1
+    assert hits[0].content == "Updated content - idempotent upsert"
 
 
 def test_delete_removes_doc(store):
-    store.upsert([_make_chunk("ci-doc-b", 0, "sẽ bị xóa")])
+    store.upsert([_make_chunk("ci-doc-b", 0, "will be deleted")])
     store.delete("ci-doc-b")
 
     results = store.search(_make_embedding(0), top_k=20)

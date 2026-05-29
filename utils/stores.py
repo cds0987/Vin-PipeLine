@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import logging
 from abc import abstractmethod
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol
 
 from config import settings
-from models.ingest_job import ChunkResult, DocumentRecord
+from models.ingest_job import ChunkResult, DocumentRecord, IngestJob
 
 log = logging.getLogger(__name__)
+LAST_VECTOR_STORE_BUILD_WARNING: str | None = None
+LAST_METADATA_STORE_BUILD_WARNING: str | None = None
 
 
 class VectorStore(Protocol):
@@ -37,7 +39,13 @@ class MetadataStore(Protocol):
     def get_by_file_path(self, file_path: str) -> DocumentRecord | None: ...
 
     @abstractmethod
+    def get_by_file_paths(self, file_paths: list[str]) -> dict[str, DocumentRecord]: ...
+
+    @abstractmethod
     def upsert_chunks(self, chunks: list[ChunkResult]) -> None: ...
+
+    @abstractmethod
+    def try_claim_ingest(self, job: IngestJob) -> bool: ...
 
     @abstractmethod
     def record_job(
@@ -49,6 +57,15 @@ class MetadataStore(Protocol):
         duration_seconds: float = 0.0,
         error_message: str | None = None,
     ) -> None: ...
+
+
+def _is_stale_indexing(doc: DocumentRecord) -> bool:
+    if doc.status != "indexing":
+        return False
+    if settings.STALE_INDEXING_SECONDS == 0:
+        return True
+    updated_at = doc.updated_at or doc.uploaded_at
+    return datetime.now(timezone.utc) - updated_at >= timedelta(seconds=settings.STALE_INDEXING_SECONDS)
 
 
 # ─── Vector store implementations ────────────────────────────────────────────
@@ -74,6 +91,14 @@ class QdrantStore:
                 collection_name=self._collection,
                 vectors_config=VectorParams(size=settings.EMBEDDING_DIM, distance=Distance.COSINE),
             )
+        else:
+            info = self._client.get_collection(self._collection)
+            actual_size = getattr(getattr(info.config.params, "vectors", None), "size", None)
+            if actual_size is not None and actual_size != settings.EMBEDDING_DIM:
+                raise ValueError(
+                    f"Qdrant collection '{self._collection}' dimension mismatch: "
+                    f"expected {settings.EMBEDDING_DIM}, got {actual_size}"
+                )
         self._client.create_payload_index(
             collection_name=self._collection,
             field_name="doc_id",
@@ -88,6 +113,12 @@ class QdrantStore:
 
         if not chunks:
             return
+        for chunk in chunks:
+            if len(chunk.embedding) != settings.EMBEDDING_DIM:
+                raise ValueError(
+                    f"Embedding dimension mismatch for chunk_id={chunk.chunk_id}: "
+                    f"expected {settings.EMBEDDING_DIM}, got {len(chunk.embedding)}"
+                )
         points = [
             PointStruct(
                 id=self._point_id(chunk.chunk_id),
@@ -107,10 +138,18 @@ class QdrantStore:
         self._client.upsert(collection_name=self._collection, points=points)
 
     def search(self, vector: list[float], top_k: int, filters: dict | None = None) -> list[ChunkResult]:
+        query_filter = None
+        if filters and filters.get("doc_id"):
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+            query_filter = Filter(
+                must=[FieldCondition(key="doc_id", match=MatchValue(value=filters["doc_id"]))]
+            )
         response = self._client.query_points(
             collection_name=self._collection,
             query=vector,
             limit=top_k,
+            query_filter=query_filter,
             with_payload=True,
             with_vectors=False,
         )
@@ -191,7 +230,13 @@ class SQLMetadataStore:
         from sqlalchemy import create_engine
         from db.schema import document_chunks, documents, ingestion_jobs, metadata as schema_metadata
 
-        self._engine = create_engine(db_url or settings.DB_URL, future=True)
+        self._engine = create_engine(
+            db_url or settings.DB_URL,
+            future=True,
+            pool_pre_ping=True,
+            pool_size=settings.DB_POOL_SIZE,
+            max_overflow=settings.DB_MAX_OVERFLOW,
+        )
         self._metadata = schema_metadata
         self._documents = documents
         self._chunks = document_chunks
@@ -199,12 +244,15 @@ class SQLMetadataStore:
         self._metadata.create_all(self._engine)
 
     def upsert(self, doc: DocumentRecord) -> None:
-        from sqlalchemy import delete
-
         payload = doc.model_dump()
         with self._engine.begin() as conn:
-            conn.execute(delete(self._documents).where(self._documents.c.id == doc.id))
-            conn.execute(self._documents.insert().values(**payload))
+            updated = conn.execute(
+                self._documents.update()
+                .where(self._documents.c.id == doc.id)
+                .values(**payload)
+            )
+            if updated.rowcount == 0:
+                conn.execute(self._documents.insert().values(**payload))
 
     def update_status(self, doc_id: str, status: str) -> None:
         from sqlalchemy import select
@@ -245,8 +293,19 @@ class SQLMetadataStore:
             ).mappings().first()
         return DocumentRecord(**dict(row)) if row else None
 
+    def get_by_file_paths(self, file_paths: list[str]) -> dict[str, DocumentRecord]:
+        from sqlalchemy import select
+
+        if not file_paths:
+            return {}
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                select(self._documents).where(self._documents.c.file_path.in_(file_paths))
+            ).mappings().all()
+        return {row["file_path"]: DocumentRecord(**dict(row)) for row in rows}
+
     def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
-        from sqlalchemy import delete
+        from sqlalchemy import delete, select
 
         if not chunks:
             return
@@ -267,8 +326,72 @@ class SQLMetadataStore:
             for i, c in enumerate(chunks)
         ]
         with self._engine.begin() as conn:
-            conn.execute(delete(self._chunks).where(self._chunks.c.doc_id == doc_id))
-            conn.execute(self._chunks.insert(), rows)
+            existing_chunk_ids = {
+                row["chunk_id"]
+                for row in conn.execute(
+                    select(self._chunks.c.chunk_id).where(self._chunks.c.doc_id == doc_id)
+                ).mappings()
+            }
+            incoming_chunk_ids = {row["chunk_id"] for row in rows}
+            stale_chunk_ids = existing_chunk_ids - incoming_chunk_ids
+            if stale_chunk_ids:
+                conn.execute(
+                    delete(self._chunks).where(self._chunks.c.chunk_id.in_(stale_chunk_ids))
+                )
+            for row in rows:
+                updated = conn.execute(
+                    self._chunks.update()
+                    .where(self._chunks.c.chunk_id == row["chunk_id"])
+                    .values(**row)
+                )
+                if updated.rowcount == 0:
+                    conn.execute(self._chunks.insert().values(**row))
+
+    def try_claim_ingest(self, job: IngestJob) -> bool:
+        from sqlalchemy import select
+
+        now = datetime.now(timezone.utc)
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                select(self._documents).where(self._documents.c.id == job.doc_id)
+            ).mappings().first()
+            if row is None:
+                conn.execute(
+                    self._documents.insert().values(
+                        id=job.doc_id,
+                        file_path=job.file_uri,
+                        file_name=job.metadata.get("file_name"),
+                        file_type=Path(job.file_uri).suffix.lstrip(".").lower() or None,
+                        document_type=job.document_type,
+                        language=job.language,
+                        status="indexing",
+                        s3_last_modified=job.s3_last_modified,
+                        uploaded_at=now,
+                        processed_at=None,
+                        updated_at=now,
+                    )
+                )
+                return True
+
+            existing = DocumentRecord(**dict(row))
+            if existing.status == "indexing" and not _is_stale_indexing(existing):
+                return False
+
+            conn.execute(
+                self._documents.update()
+                .where(self._documents.c.id == job.doc_id)
+                .values(
+                    file_path=job.file_uri,
+                    file_name=job.metadata.get("file_name") or existing.file_name,
+                    file_type=Path(job.file_uri).suffix.lstrip(".").lower() or existing.file_type,
+                    document_type=job.document_type,
+                    language=job.language,
+                    status="indexing",
+                    s3_last_modified=job.s3_last_modified or existing.s3_last_modified,
+                    updated_at=now,
+                )
+            )
+            return True
 
     def record_job(self, doc_id: str, status: str, chunk_count: int = 0,
                    embedding_model: str = "", duration_seconds: float = 0.0,
@@ -299,6 +422,7 @@ class FileMetadataStore:
         self._base_dir = Path(base_dir or "data/local_store")
         self._base_dir.mkdir(parents=True, exist_ok=True)
         self._documents_file = self._base_dir / "documents.json"
+        self._jobs_file = self._base_dir / "ingestion_jobs.json"
 
     def _read(self) -> dict:
         if not self._documents_file.exists():
@@ -334,18 +458,96 @@ class FileMetadataStore:
                 return DocumentRecord(**payload)
         return None
 
+    def get_by_file_paths(self, file_paths: list[str]) -> dict[str, DocumentRecord]:
+        wanted = set(file_paths)
+        found: dict[str, DocumentRecord] = {}
+        for payload in self._read().values():
+            file_path = payload.get("file_path")
+            if file_path in wanted:
+                found[file_path] = DocumentRecord(**payload)
+        return found
+
     def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
         pass
+
+    def try_claim_ingest(self, job: IngestJob) -> bool:
+        docs = self._read()
+        payload = docs.get(job.doc_id)
+        if payload:
+            existing = DocumentRecord(**payload)
+            if existing.status == "indexing" and not _is_stale_indexing(existing):
+                return False
+            doc = existing.model_copy(
+                update={
+                    "file_path": job.file_uri,
+                    "file_name": job.metadata.get("file_name") or existing.file_name,
+                    "file_type": Path(job.file_uri).suffix.lstrip(".").lower() or existing.file_type,
+                    "document_type": job.document_type,
+                    "language": job.language,
+                    "status": "indexing",
+                    "s3_last_modified": job.s3_last_modified or existing.s3_last_modified,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
+        else:
+            doc = DocumentRecord(
+                id=job.doc_id,
+                file_path=job.file_uri,
+                file_name=job.metadata.get("file_name"),
+                file_type=Path(job.file_uri).suffix.lstrip(".").lower() or None,
+                document_type=job.document_type,
+                language=job.language,
+                status="indexing",
+                s3_last_modified=job.s3_last_modified,
+            )
+        docs[job.doc_id] = doc.model_dump(mode="json")
+        self._write(docs)
+        return True
 
     def record_job(self, doc_id: str, status: str, chunk_count: int = 0,
                    embedding_model: str = "", duration_seconds: float = 0.0,
                    error_message: str | None = None) -> None:
-        pass
+        import json
+        existing: list[dict]
+        if self._jobs_file.exists():
+            existing = json.loads(self._jobs_file.read_text(encoding="utf-8"))
+        else:
+            existing = []
+        now = datetime.now(timezone.utc).isoformat()
+        existing.append(
+            {
+                "doc_id": doc_id,
+                "status": status,
+                "chunk_count": chunk_count,
+                "embedding_model": embedding_model or None,
+                "duration_seconds": duration_seconds,
+                "error_message": error_message,
+                "started_at": now,
+                "finished_at": now if status in {"indexed", "failed"} else None,
+            }
+        )
+        self._jobs_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+    def update_processed(self, doc_id: str, total_chunks: int, processed_at: datetime) -> None:
+        docs = self._read()
+        payload = docs.get(doc_id)
+        if not payload:
+            return
+        doc = DocumentRecord(**payload).model_copy(
+            update={
+                "total_chunks": total_chunks,
+                "processed_at": processed_at,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        docs[doc_id] = doc.model_dump(mode="json")
+        self._write(docs)
 
 
 class InMemoryMetadataStore:
     def __init__(self) -> None:
         self._documents: dict[str, DocumentRecord] = {}
+        self._jobs: list[dict] = []
 
     def upsert(self, doc: DocumentRecord) -> None:
         self._documents[doc.id] = doc
@@ -365,26 +567,93 @@ class InMemoryMetadataStore:
                 return doc
         return None
 
+    def get_by_file_paths(self, file_paths: list[str]) -> dict[str, DocumentRecord]:
+        wanted = set(file_paths)
+        return {doc.file_path: doc for doc in self._documents.values() if doc.file_path in wanted}
+
     def upsert_chunks(self, chunks: list[ChunkResult]) -> None:
         pass
+
+    def try_claim_ingest(self, job: IngestJob) -> bool:
+        existing = self._documents.get(job.doc_id)
+        if existing and existing.status == "indexing" and not _is_stale_indexing(existing):
+            return False
+
+        now = datetime.now(timezone.utc)
+        if existing is None:
+            self._documents[job.doc_id] = DocumentRecord(
+                id=job.doc_id,
+                file_path=job.file_uri,
+                file_name=job.metadata.get("file_name"),
+                file_type=Path(job.file_uri).suffix.lstrip(".").lower() or None,
+                document_type=job.document_type,
+                language=job.language,
+                status="indexing",
+                s3_last_modified=job.s3_last_modified,
+                uploaded_at=now,
+                updated_at=now,
+            )
+        else:
+            self._documents[job.doc_id] = existing.model_copy(
+                update={
+                    "file_path": job.file_uri,
+                    "file_name": job.metadata.get("file_name") or existing.file_name,
+                    "file_type": Path(job.file_uri).suffix.lstrip(".").lower() or existing.file_type,
+                    "document_type": job.document_type,
+                    "language": job.language,
+                    "status": "indexing",
+                    "s3_last_modified": job.s3_last_modified or existing.s3_last_modified,
+                    "updated_at": now,
+                }
+            )
+        return True
 
     def record_job(self, doc_id: str, status: str, chunk_count: int = 0,
                    embedding_model: str = "", duration_seconds: float = 0.0,
                    error_message: str | None = None) -> None:
-        pass
+        now = datetime.now(timezone.utc).isoformat()
+        self._jobs.append(
+            {
+                "doc_id": doc_id,
+                "status": status,
+                "chunk_count": chunk_count,
+                "embedding_model": embedding_model or None,
+                "duration_seconds": duration_seconds,
+                "error_message": error_message,
+                "started_at": now,
+                "finished_at": now if status in {"indexed", "failed"} else None,
+            }
+        )
+
+    def update_processed(self, doc_id: str, total_chunks: int, processed_at: datetime) -> None:
+        existing = self._documents.get(doc_id)
+        if existing is None:
+            return
+        self._documents[doc_id] = existing.model_copy(
+            update={
+                "total_chunks": total_chunks,
+                "processed_at": processed_at,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
 
 
 def build_vector_store() -> VectorStore:
+    global LAST_VECTOR_STORE_BUILD_WARNING
+    LAST_VECTOR_STORE_BUILD_WARNING = None
     if settings.VECTOR_STORE == "memory":
         return InMemoryVectorStore()
     try:
         return QdrantStore()
     except Exception as exc:
-        log.warning("QdrantStore unavailable (%s), falling back to InMemoryVectorStore", exc)
+        LAST_VECTOR_STORE_BUILD_WARNING = f"QdrantStore unavailable: {exc}"
+        log.warning("%s; falling back to InMemoryVectorStore", LAST_VECTOR_STORE_BUILD_WARNING)
         return InMemoryVectorStore()
 
 
 def build_metadata_store() -> MetadataStore:
+    global LAST_METADATA_STORE_BUILD_WARNING
+    LAST_METADATA_STORE_BUILD_WARNING = None
     if settings.METADATA_STORE == "memory":
         return InMemoryMetadataStore()
     if settings.METADATA_STORE == "file":
@@ -392,5 +661,14 @@ def build_metadata_store() -> MetadataStore:
     try:
         return SQLMetadataStore()
     except Exception as exc:
-        log.warning("SQLMetadataStore unavailable (%s), falling back to FileMetadataStore", exc)
+        LAST_METADATA_STORE_BUILD_WARNING = f"SQLMetadataStore unavailable: {exc}"
+        log.warning("%s; falling back to FileMetadataStore", LAST_METADATA_STORE_BUILD_WARNING)
         return FileMetadataStore()
+
+
+def get_last_vector_store_build_warning() -> str | None:
+    return LAST_VECTOR_STORE_BUILD_WARNING
+
+
+def get_last_metadata_store_build_warning() -> str | None:
+    return LAST_METADATA_STORE_BUILD_WARNING
