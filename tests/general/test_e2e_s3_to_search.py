@@ -27,7 +27,7 @@ import config
 from utils.ai_provider import MockAIProvider
 from utils.stores import InMemoryMetadataStore
 
-pytestmark = [pytest.mark.minio, pytest.mark.qdrant]
+pytestmark = [pytest.mark.minio, pytest.mark.qdrant, pytest.mark.e2e]
 
 # ── constants ────────────────────────────────────────────────────────────────
 

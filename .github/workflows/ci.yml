@@ -9,149 +9,106 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# ── Path detection ─────────────────────────────────────────────────────────────
+# CI has no knowledge of internal directory structure.
+# Any .py change or infra change triggers the right jobs.
+
 jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      app: ${{ steps.filter.outputs.app }}
-      k8s: ${{ steps.filter.outputs.k8s }}
+      code: ${{ steps.filter.outputs.code }}
+      k8s:  ${{ steps.filter.outputs.k8s }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
-            app:
-              - 'api/**'
-              - 'pipeline/**'
-              - 'retrieval/**'
-              - 'adapters/**'
-              - 'utils/**'
-              - 'models/**'
-              - 'db/**'
-              - 'migrations/**'
+            code:
+              - '**/*.py'
+              - 'requirements*.txt'
               - 'docker/**'
-              - 'requirements.txt'
+              - 'Makefile'
+              - '.env.ci'
             k8s:
               - 'k8s/**'
+              - 'Makefile'
 
+  # ── Unit tests (always) ───────────────────────────────────────────────────────
   pytest:
     runs-on: ubuntu-latest
-    env:
-      AI_PROVIDER: mock
-      VECTOR_STORE: memory
-      METADATA_STORE: memory
-      USE_S3: "false"
-      MARKDOWN_S3_PREFIX: rag-derived/markdown
-      CAPTION_MODEL: heuristic
-      PARSER_VERSION: pipeline.parsers.v1
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Load CI env
+        run: grep -v '^#' .env.ci >> $GITHUB_ENV
+      - run: make test
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run pytest
-        run: pytest -q
-
+  # ── Docker full-stack test (only when code changes) ───────────────────────────
   docker-test:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.app == 'true'
-    env:
-      AI_PROVIDER: mock
-      VECTOR_STORE: memory
-      METADATA_STORE: memory
-      USE_S3: "false"
-      MARKDOWN_S3_PREFIX: rag-derived/markdown
-      CAPTION_MODEL: heuristic
-      PARSER_VERSION: pipeline.parsers.v1
+    if: needs.changes.outputs.code == 'true'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Load CI env
+        run: grep -v '^#' .env.ci >> $GITHUB_ENV
+      - run: make docker-test
 
-      - name: Verify Docker Compose test flow
-        run: docker compose run --rm test
-
+  # ── Qdrant integration (not fork PRs) ─────────────────────────────────────────
   qdrant-integration:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
-      AI_PROVIDER: mock
-      METADATA_STORE: memory
-      USE_S3: "false"
       VECTOR_STORE: qdrant
-      MARKDOWN_S3_PREFIX: rag-derived/markdown
-      CAPTION_MODEL: heuristic
-      PARSER_VERSION: pipeline.parsers.v1
       QDRANT_URL: https://4a17666f-23ca-4555-9a16-ba7867005326.us-east-1-1.aws.cloud.qdrant.io
       QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
       QDRANT_COLLECTION: ci-integration-test
       EMBEDDING_DIM: "32"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Load CI env
+        run: grep -v '^#' .env.ci >> $GITHUB_ENV
+      - run: pytest -m "qdrant and not e2e" -v
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run Qdrant integration tests
-        run: pytest -m qdrant -v
-
+  # ── MinIO integration (not fork PRs) ──────────────────────────────────────────
   minio-integration:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
-      AI_PROVIDER: mock
-      VECTOR_STORE: memory
-      METADATA_STORE: memory
-      USE_S3: "false"
-      MARKDOWN_S3_PREFIX: rag-derived/markdown
-      CAPTION_MODEL: heuristic
-      PARSER_VERSION: pipeline.parsers.v1
       MINIO_TEST_ENDPOINT: http://localhost:9000
       MINIO_TEST_BUCKET: rag-pipeline-local
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Start MinIO
         run: |
-          docker run -d \
-            --name minio \
-            -p 9000:9000 \
+          docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
             minio/minio server /data
           until curl -sf http://localhost:9000/minio/health/live; do sleep 1; done
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Load CI env
+        run: grep -v '^#' .env.ci >> $GITHUB_ENV
+      - run: pytest -m "minio and not e2e" -v
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run MinIO integration tests
-        run: pytest -m minio -v
-
+  # ── Deploy (main only, after tests pass) ──────────────────────────────────────
   deploy:
     runs-on: ubuntu-latest
     needs: [pytest, docker-test, changes]
@@ -161,13 +118,12 @@ jobs:
       github.event_name == 'push' &&
       needs.pytest.result == 'success' &&
       (needs.docker-test.result == 'success' || needs.docker-test.result == 'skipped') &&
-      (needs.changes.outputs.app == 'true' || needs.changes.outputs.k8s == 'true')
+      (needs.changes.outputs.code == 'true' || needs.changes.outputs.k8s == 'true')
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
@@ -175,58 +131,29 @@ jobs:
           workload_identity_provider: projects/289299478169/locations/global/workloadIdentityPools/github-pool/providers/github-provider
           service_account: github-actions@vintravel-chatbot.iam.gserviceaccount.com
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        if: needs.changes.outputs.app == 'true'
-        run: gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
-
-      - name: Build and push image
-        if: needs.changes.outputs.app == 'true'
-        run: |
-          IMAGE=asia-southeast1-docker.pkg.dev/vintravel-chatbot/vin-pipeline/api
-          docker build -f docker/Dockerfile.api -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
-          docker push $IMAGE:${{ github.sha }}
-          docker push $IMAGE:latest
-
-      - name: Install GKE auth plugin
-        run: gcloud components install gke-gcloud-auth-plugin --quiet
+      - uses: google-github-actions/setup-gcloud@v2
 
       - name: Get GKE credentials
         run: |
           gcloud container clusters get-credentials vin-pipeline \
-            --zone asia-southeast1-a \
-            --project vintravel-chatbot
+            --zone asia-southeast1-a --project vintravel-chatbot
 
-      - name: Apply k8s secret
+      - name: Apply secret
         run: |
-          kubectl create secret generic vin-pipeline-secret \
-            --from-literal=DATABASE_URL=${{ secrets.DATABASE_URL }} \
-            --from-literal=QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }} \
-            --from-literal=AI_API_KEY=${{ secrets.AI_API_KEY }} \
-            --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
-            --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
-            --from-literal=S3_ENDPOINT=${{ secrets.S3_ENDPOINT }} \
-            --from-literal=S3_BUCKET=${{ secrets.S3_BUCKET }} \
-            --dry-run=client -o yaml | kubectl apply -f -
+          make apply-secret \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            QDRANT_API_KEY="${{ secrets.QDRANT_API_KEY }}" \
+            AI_API_KEY="${{ secrets.AI_API_KEY }}" \
+            AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            S3_ENDPOINT="${{ secrets.S3_ENDPOINT }}" \
+            S3_BUCKET="${{ secrets.S3_BUCKET }}"
 
-      - name: Apply k8s manifests
+      - name: Build & push image
+        if: needs.changes.outputs.code == 'true'
         run: |
-          kubectl apply -f k8s/configmap.yaml
-          kubectl apply -f k8s/postgres-statefulset.yaml
-          kubectl apply -f k8s/qdrant-statefulset.yaml
-          kubectl apply -f k8s/api-deployment.yaml
+          gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
+          make push SHA=${{ github.sha }}
 
-      - name: Rollout new image
-        if: needs.changes.outputs.app == 'true'
-        run: |
-          kubectl set image deployment/vin-pipeline-api \
-            api=asia-southeast1-docker.pkg.dev/vintravel-chatbot/vin-pipeline/api:${{ github.sha }}
-          kubectl rollout status deployment/vin-pipeline-api --timeout=600s
-
-      - name: Rollout restart (config-only change)
-        if: needs.changes.outputs.app == 'false' && needs.changes.outputs.k8s == 'true'
-        run: |
-          kubectl rollout restart deployment/vin-pipeline-api
-          kubectl rollout status deployment/vin-pipeline-api --timeout=600s
+      - name: Deploy
+        run: make deploy SHA=${{ github.sha }}
