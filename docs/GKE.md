@@ -121,35 +121,40 @@ gh secret set S3_ENDPOINT --body "<url>"
 gh secret set S3_BUCKET --body "<bucket>"
 
 # 2. Sửa configmap
-# k8s/configmap.yaml: USE_S3: "true"
+# k8s/base/configmap.yaml: USE_S3: "true"
 
 # 3. Push → CI tự deploy
-git add k8s/configmap.yaml
+git add k8s/base/configmap.yaml
 git commit -m "Enable S3 scanner"
 git push
 ```
 
-### Đổi AI provider (khi có OpenAI key)
+### Đổi AI provider / base URL
+
+Hiện tại đang dùng OpenRouter. Để đổi sang OpenAI trực tiếp hoặc provider khác:
 
 ```powershell
 # 1. Update secret
 gh secret set AI_API_KEY --body "sk-<real-key>"
 
-# 2. Sửa configmap
-# k8s/configmap.yaml:
-#   AI_PROVIDER: "auto"
+# 2. Sửa k8s/base/configmap.yaml:
+#   AI_BASE_URL: ""                          # trống = OpenAI mặc định
+#   EMBED_MODEL: "text-embedding-3-small"
+#   VISION_MODEL: "gpt-4o"
 #   EMBEDDING_DIM: "1536"
 
-# 3. Xóa Qdrant collection cũ (bắt buộc — dimension thay đổi)
+# 3. Nếu đổi EMBEDDING_DIM — xóa collection cũ (dimension khác → collection mới tự tạo)
 kubectl port-forward qdrant-0 6333:6333
 # Mở terminal khác:
-Invoke-RestMethod -Uri "http://localhost:6333/collections/documents" -Method DELETE
+Invoke-RestMethod -Uri "http://localhost:6333/collections/documents_1536" -Method DELETE
 
-# 4. Push
-git add k8s/configmap.yaml
-git commit -m "Switch to OpenAI provider"
+# 4. Push → CI tự deploy
+git add k8s/base/configmap.yaml
+git commit -m "Switch AI provider"
 git push
 ```
+
+**Lưu ý collection name**: từ `2026-05-30`, collection Qdrant encode dimension — `documents_1536`, `documents_32`, v.v. Không còn collection tên `documents` đơn thuần.
 
 ---
 
@@ -186,13 +191,16 @@ kubectl describe pod <pod-name>
 
 ### Dimension mismatch (search trả 500)
 
+Xảy ra nếu đổi `EMBEDDING_DIM` mà collection cũ vẫn còn. Collection name encode dimension (`documents_1536`) nên thường tự tránh được vấn đề này — collection mới tự tạo.
+
 ```powershell
 # Xem log để confirm lỗi
-kubectl logs deployment/vin-pipeline-api | Select-String "dimension"
+kubectl logs deployment/vin-pipeline-api | Select-String "dimension|mismatch"
 
-# Xóa collection
+# Xóa collection theo đúng tên (có hậu tố dimension)
 kubectl port-forward qdrant-0 6333:6333
-Invoke-RestMethod -Uri "http://localhost:6333/collections/documents" -Method DELETE
+# Terminal khác:
+Invoke-RestMethod -Uri "http://localhost:6333/collections/documents_1536" -Method DELETE
 
 # Rollout lại để tạo collection mới
 kubectl rollout restart deployment/vin-pipeline-api
@@ -269,13 +277,13 @@ Sau đó push bất kỳ commit nào lên main → CI tự deploy toàn bộ.
 
 ---
 
-## Trạng thái hiện tại (2026-05-30)
+## Trạng thái hiện tại (2026-05-31)
 
 | Thứ | Trạng thái |
 |---|---|
-| API | Running, `/health` OK |
-| Qdrant | 1 replica, `EMBEDDING_DIM=32` (MockAI) |
-| Postgres | Running, schema migrated |
+| API | Running, `/health` OK, 2 replicas |
+| Qdrant | 1 replica, `EMBEDDING_DIM=1536` (OpenRouter) |
+| Postgres | Running, schema migrated (initContainer tự chạy alembic) |
 | S3 Scanner | Tắt (`USE_S3=false`), chờ credentials từ team khác |
-| AI Provider | Mock — không có semantic search thật |
+| AI Provider | `OpenAIProvider` via OpenRouter — semantic search thật |
 | Secret management | Tự động qua CI từ GitHub Secrets |

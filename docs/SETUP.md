@@ -218,24 +218,23 @@ kubectl port-forward postgres-0 5432:5432 &
 
 ### Khi có S3 credentials từ team khác
 
-```bash
-# Cập nhật secret
-kubectl create secret generic vin-pipeline-secret \
-  --from-literal=S3_ENDPOINT=<url> \
-  --from-literal=S3_ACCESS_KEY=<key> \
-  --from-literal=S3_SECRET_KEY=<secret> \
-  --from-literal=S3_BUCKET=<bucket> \
-  -o yaml --dry-run=client | kubectl apply -f -
+```powershell
+gh secret set AWS_ACCESS_KEY_ID --body "<key>"
+gh secret set AWS_SECRET_ACCESS_KEY --body "<secret>"
+gh secret set S3_ENDPOINT --body "<url>"
+gh secret set S3_BUCKET --body "<bucket>"
 ```
 
-Sau đó đổi `USE_S3: "true"` trong `k8s/configmap.yaml` và push lên main — CI sẽ tự deploy.
+Sau đó đổi `USE_S3: "true"` trong `k8s/base/configmap.yaml` và push lên main — CI sẽ tự deploy.
 
-### Khi đổi AI provider thật (OpenAI)
+### Khi đổi AI provider
 
-1. Xóa collection cũ: `curl -X DELETE http://localhost:6333/collections/documents` (qua port-forward)
-2. Cập nhật `k8s/configmap.yaml`: `AI_PROVIDER: "auto"`, `EMBEDDING_DIM: "1536"`
-3. Thêm `AI_API_KEY` vào secret
-4. Push lên main
+Hiện tại GKE dùng OpenRouter. Để đổi provider hoặc key:
+
+1. `gh secret set AI_API_KEY --body "sk-<new-key>"`
+2. Sửa `k8s/base/configmap.yaml`: `AI_BASE_URL`, `EMBED_MODEL`, `VISION_MODEL` theo format provider mới
+3. Nếu đổi `EMBEDDING_DIM`: collection Qdrant mới tự tạo (tên encode dimension — không cần xóa thủ công)
+4. Push lên main → CI tự deploy
 
 ### CI/CD — 5 jobs
 
