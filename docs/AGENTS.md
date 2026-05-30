@@ -10,8 +10,8 @@ Tự động quét S3, parse và index nội dung tài liệu thành vector embe
 
 | Hướng | Luồng | Code |
 |---|---|---|
-| **VÀO** | S3 scanner polls bucket → `IngestJob` → pipeline xử lý | `adapters/s3_adapter.py` → `pipeline/run.py` |
-| **RA** | `POST /search` → embed query → vector search → kết quả | `api/main.py` → `retrieval/service.py` |
+| **VÀO** | S3 scanner polls bucket → `IngestJob` → pipeline xử lý | `adapters/s3_adapter.py` → `app/application/ingest/run_ingest_job.py` |
+| **RA** | `POST /search` → embed query → vector search → kết quả | `api/main.py` → `app/application/search/search_sections.py` |
 
 Bất kỳ path nào đưa thông tin vào/ra ngoài 2 luồng này là bug hoặc dev tool — không phải kiến trúc.
 
@@ -30,7 +30,7 @@ Nếu thấy code cũ còn tham chiếu những thứ trên → đó là legacy 
 
 ## Conventions bắt buộc
 
-1. **Pipeline core chỉ biết 5 interface**: `IngestJob`, `ChunkResult`, `AIProvider`, `VectorStore`, `MetadataStore` — không import SDK cụ thể vào `pipeline/`.
+1. **Application layer chỉ phụ thuộc vào ports** — `app/application/` không được import `boto3`, `openai`, `qdrant_client`, `sqlalchemy` hay bất kỳ SDK cụ thể nào. Mọi dependency đi qua port interface trong `app/ports/`.
 2. **Runtime config qua env vars** — không hardcode URL, key, hay model name vào code.
 3. **Mọi thay đổi API contract hoặc DB schema** → cập nhật `PIPELINE.md` trước khi merge.
 4. **`FileAdapter`** là dev/test only — không xuất hiện trong production flow, không mô tả trong architecture.
@@ -41,9 +41,11 @@ Nếu thấy code cũ còn tham chiếu những thứ trên → đó là legacy 
 
 | Tôi cần biết... | File |
 |---|---|
+| Developer mới — setup từ đầu, cấu trúc, workflow hàng ngày | `ONBOARDING.md` |
 | Tại sao system thiết kế thế này + diagram + design principles + extension guide | `ARCHITECTURE.md` |
 | Chi tiết từng bước pipeline, schema DB, API request/response, env vars | `PIPELINE.md` |
 | Cách chạy local, docker compose, test commands | `SETUP.md` |
+| CI/CD — 5 jobs, trigger logic, secrets, debug failed deploy | `CICD.md` |
 | Vận hành GKE, xem log, debug production | `GKE.md` |
 | Production risks, bottlenecks, hardening backlog | `RISKS.md` |
 | Test structure + coverage backlog còn thiếu | `TESTS.md` |
@@ -72,4 +74,4 @@ Mọi task hoàn thành khi tất cả các điều sau đúng:
 - [ ] Nếu thay đổi API contract hoặc DB schema → `PIPELINE.md` đã được cập nhật
 - [ ] Nếu thay đổi dev/test flow → `SETUP.md` đã được cập nhật
 - [ ] `/health` vẫn phản ánh đúng fallback state
-- [ ] Không có SDK-specific code trong `pipeline/`
+- [ ] Không có SDK-specific code trong `app/application/` hoặc `app/domain/`
