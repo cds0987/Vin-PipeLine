@@ -69,9 +69,16 @@ services:
       - QDRANT_PORT=6333
       - USE_S3=true
       - S3_BUCKET=rag-pipeline-local
+      - MARKDOWN_BUCKET=${MARKDOWN_BUCKET:-rag-pipeline-local}
+      - MARKDOWN_S3_PREFIX=${MARKDOWN_S3_PREFIX:-rag-derived/markdown}
       - S3_ENDPOINT=http://minio:9000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
+      - SECTION_FALLBACK_MAX_CHARS=${SECTION_FALLBACK_MAX_CHARS:-2400}
+      - SECTION_FALLBACK_PARAGRAPHS=${SECTION_FALLBACK_PARAGRAPHS:-3}
+      - CAPTION_MAX_CHARS=${CAPTION_MAX_CHARS:-280}
+      - CAPTION_MODEL=${CAPTION_MODEL:-heuristic}
+      - PARSER_VERSION=${PARSER_VERSION:-pipeline.parsers.v1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,14 +91,23 @@ services:
       context: .
       dockerfile: docker/Dockerfile.test
     environment:
-      - AI_PROVIDER=mock
+      # AI: use real credentials from .env when available, fall back to mock
+      - AI_PROVIDER=${AI_PROVIDER:-mock}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_BASE_URL=${AI_BASE_URL:-}
+      - EMBED_MODEL=${EMBED_MODEL:-text-embedding-3-small}
+      - VISION_MODEL=${VISION_MODEL:-gpt-4o}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-32}
+      # Infrastructure — fixed for test environment
       - VECTOR_STORE=qdrant
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - QDRANT_COLLECTION=ci-docker-test
-      - EMBEDDING_DIM=32
       - METADATA_STORE=memory
       - USE_S3=false
+      - MARKDOWN_S3_PREFIX=${MARKDOWN_S3_PREFIX:-rag-derived/markdown}
+      - CAPTION_MODEL=${CAPTION_MODEL:-heuristic}
+      - PARSER_VERSION=${PARSER_VERSION:-pipeline.parsers.v1}
       - MINIO_TEST_ENDPOINT=http://minio:9000
       - MINIO_TEST_BUCKET=rag-pipeline-local
       - MINIO_ROOT_USER=minioadmin

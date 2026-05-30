@@ -8,6 +8,7 @@ import pytest
 
 from fastapi.testclient import TestClient
 
+from app.bootstrap.container import build_container
 from config import settings
 from utils.stores import InMemoryMetadataStore, InMemoryVectorStore
 
@@ -24,8 +25,14 @@ class FakeAIProvider:
             embeddings.append(vector)
         return embeddings
 
+    def caption(self, texts: list[str]) -> list[str]:
+        return [text[:120].strip() for text in texts]
+
     def ocr(self, image_bytes: bytes) -> str:
         return "ocr text"
+
+    def get_llm_client(self):
+        return None
 
 
 @pytest.fixture
@@ -59,9 +66,12 @@ def tmp_path():
 def api_client(monkeypatch, fake_ai_provider, vector_store, metadata_store):
     import api.main as api_main
 
-    monkeypatch.setattr(api_main, "build_ai_provider", lambda: (fake_ai_provider, None))
-    monkeypatch.setattr(api_main, "build_vector_store", lambda: (vector_store, None))
-    monkeypatch.setattr(api_main, "build_metadata_store", lambda: (metadata_store, None))
+    container = build_container(
+        ai_provider=fake_ai_provider,
+        vector_store=vector_store,
+        metadata_store=metadata_store,
+    )
+    monkeypatch.setattr(api_main, "build_container", lambda: container)
 
     with TestClient(api_main.app) as client:
         yield client

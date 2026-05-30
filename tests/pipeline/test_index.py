@@ -18,12 +18,13 @@ def _job(doc_id: str = "doc-idx", file_uri: str = "s3://bucket/file.pdf") -> Ing
 def _chunks(doc_id: str, n: int = 3) -> list[ChunkResult]:
     return [
         ChunkResult(
-            chunk_id=f"{doc_id}_chunk_{i:04d}",
+            section_id=f"{doc_id}_section_{i:04d}",
             doc_id=doc_id,
-            content=f"content {i}",
+            section_content=f"content {i}",
+            caption=f"caption {i}",
             embedding=[0.1, 0.2, 0.3],
-            page_start=i + 1,
-            page_end=i + 1,
+            source_s3_uri=f"s3://bucket/{doc_id}.pdf",
+            markdown_s3_uri=f"s3://bucket/markdown/{doc_id}.md",
         )
         for i in range(n)
     ]
@@ -31,12 +32,12 @@ def _chunks(doc_id: str, n: int = 3) -> list[ChunkResult]:
 
 # ─── Return value shape ───────────────────────────────────────────────────────
 
-def test_index_returns_doc_id_status_and_chunk_count():
+def test_index_returns_doc_id_status_and_section_count():
     job = _job()
     result = index.run(_chunks(job.doc_id), job, InMemoryVectorStore(), InMemoryMetadataStore())
     assert result["doc_id"] == job.doc_id
     assert result["status"] == "indexed"
-    assert result["chunk_count"] == 3
+    assert result["section_count"] == 3
 
 
 # ─── Status transitions ───────────────────────────────────────────────────────
@@ -48,14 +49,15 @@ def test_index_final_document_status_is_indexed():
     assert metadata_store.get_document(job.doc_id).status == "indexed"
 
 
-# ─── s3_uri stamped on every chunk ───────────────────────────────────────────
+# ─── URIs stamped on every section ───────────────────────────────────────────
 
-def test_index_stamps_s3_uri_on_each_chunk():
+def test_index_stamps_source_and_markdown_uri_on_each_section():
     job = _job(doc_id="doc-uri", file_uri="s3://my-bucket/reports/q1.pdf")
     chunks = _chunks(job.doc_id)
     index.run(chunks, job, InMemoryVectorStore(), InMemoryMetadataStore())
     for chunk in chunks:
-        assert chunk.metadata["s3_uri"] == "s3://my-bucket/reports/q1.pdf"
+        assert chunk.metadata["source_s3_uri"] == "s3://my-bucket/reports/q1.pdf"
+        assert chunk.metadata["markdown_s3_uri"].endswith(f"{job.doc_id}.md")
 
 
 # ─── Idempotency — old vectors removed before upsert ─────────────────────────
@@ -115,9 +117,9 @@ def test_index_forwards_s3_last_modified_to_document_record():
     assert doc.s3_last_modified == ts
 
 
-# ─── Chunks upserted to vector store ─────────────────────────────────────────
+# ─── Sections upserted to vector store ───────────────────────────────────────
 
-def test_index_chunks_are_searchable_after_indexing():
+def test_index_sections_are_searchable_after_indexing():
     job = _job(doc_id="doc-search")
     vector_store = InMemoryVectorStore()
     index.run(_chunks(job.doc_id), job, vector_store, InMemoryMetadataStore())

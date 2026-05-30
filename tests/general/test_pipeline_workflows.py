@@ -17,13 +17,16 @@ def test_pipeline_run_indexes_document(fake_ai_provider, vector_store, metadata_
 
     assert result["doc_id"] == "doc-pipeline"
     assert result["status"] == "indexed"
-    assert result["chunk_count"] >= 1
+    assert result["section_count"] >= 1
     assert result["embedding_model"] == settings.EMBED_MODEL
+    assert result["markdown_s3_uri"].endswith("doc-pipeline.md")
 
-    stored_chunks = vector_store.search([29.0, 1.0, 0.5], top_k=5)
-    assert stored_chunks
-    assert stored_chunks[0].metadata.get("s3_uri") == "data/sample/policy.txt"
+    stored_sections = vector_store.search([29.0, 1.0, 0.5], top_k=5)
+    assert stored_sections
+    assert stored_sections[0].metadata.get("source_s3_uri") == "data/sample/policy.txt"
+    assert stored_sections[0].metadata.get("markdown_s3_uri", "").endswith("doc-pipeline.md")
 
     doc = metadata_store.get_document("doc-pipeline")
     assert doc is not None
     assert doc.status == "indexed"
+    assert doc.section_count == result["section_count"]

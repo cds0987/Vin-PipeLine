@@ -11,16 +11,12 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from adapters.s3_adapter import S3Scanner
+from app.bootstrap.container import Container, build_container
 from config import settings
-from pipeline.run import run as run_pipeline
-from retrieval.service import RetrievalService
-from utils.ai_provider import MockAIProvider, build_ai_provider
-from utils.stores import MetadataStore, VectorStore, build_metadata_store, build_vector_store
+from models.ingest_job import IngestJob
 
 log = logging.getLogger(__name__)
 
-# Prevents concurrent scan+ingest cycles across the background scanner and manual /scan.
 _scan_lock = threading.Lock()
 
 
@@ -42,36 +38,19 @@ class ScanRequest(BaseModel):
     prefix: str | None = None
 
 
-def _run_single_job(job, ai_provider, vector_store: VectorStore, metadata_store: MetadataStore) -> dict:
+def _run_single_job(job: IngestJob, container: Container) -> dict:
     deadline_monotonic = None
     if settings.SCAN_JOB_TIMEOUT_SECONDS > 0:
         deadline_monotonic = time.perf_counter() + settings.SCAN_JOB_TIMEOUT_SECONDS
-    return run_pipeline(
-        job,
-        ai_provider=ai_provider,
-        vector_store=vector_store,
-        metadata_store=metadata_store,
-        deadline_monotonic=deadline_monotonic,
-    )
+    return container.run_ingest_job.execute(job, deadline_monotonic=deadline_monotonic)
 
 
-def _run_jobs(jobs, ai_provider, vector_store: VectorStore, metadata_store: MetadataStore) -> int:
-    """Run a pre-computed job list with per-job claiming handled inside the pipeline."""
+def _run_jobs(jobs: list[IngestJob], container: Container) -> int:
     ran = 0
     if not jobs:
         return ran
-
     with ThreadPoolExecutor(max_workers=settings.SCAN_MAX_WORKERS) as pool:
-        futures = {
-            pool.submit(
-                _run_single_job,
-                job,
-                ai_provider,
-                vector_store,
-                metadata_store,
-            ): job
-            for job in jobs
-        }
+        futures = {pool.submit(_run_single_job, job, container): job for job in jobs}
         for future in as_completed(futures):
             job = futures[future]
             try:
@@ -83,20 +62,18 @@ def _run_jobs(jobs, ai_provider, vector_store: VectorStore, metadata_store: Meta
     return ran
 
 
-def _scan_and_run_once(ai_provider, vector_store: VectorStore, metadata_store: MetadataStore) -> int:
+def _scan_and_run_once(container: Container) -> int:
     if not _scan_lock.acquire(blocking=False):
         log.warning("Scan already in progress - skipping scanner cycle")
         return 0
-
     try:
-        jobs = S3Scanner(metadata_store).scan()
+        jobs = container.scan_documents.execute()
     finally:
         _scan_lock.release()
-    return _run_jobs(jobs, ai_provider, vector_store, metadata_store)
+    return _run_jobs(jobs, container)
 
 
-def _scanner_loop(ai_provider, vector_store: VectorStore, metadata_store: MetadataStore) -> None:
-    """Poll S3 every SCAN_INTERVAL_SECONDS and skip a cycle if one is still running."""
+def _scanner_loop(container: Container) -> None:
     interval = settings.SCAN_INTERVAL_SECONDS
     log.info(
         "S3 scanner started - interval=%ds bucket=%s prefix=%r",
@@ -104,10 +81,9 @@ def _scanner_loop(ai_provider, vector_store: VectorStore, metadata_store: Metada
         settings.S3_BUCKET,
         settings.SCAN_PREFIX,
     )
-
     while True:
         try:
-            _scan_and_run_once(ai_provider, vector_store, metadata_store)
+            _scan_and_run_once(container)
         except Exception as exc:
             log.error("Scanner loop error: %s", exc)
         time.sleep(interval)
@@ -115,29 +91,11 @@ def _scanner_loop(ai_provider, vector_store: VectorStore, metadata_store: Metada
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.ai_provider, ai_warning = build_ai_provider()
-    app.state.vector_store, vector_warning = build_vector_store()
-    app.state.metadata_store, metadata_warning = build_metadata_store()
-    app.state.degraded_reasons = [
-        reason
-        for reason in (
-            ai_warning,
-            vector_warning,
-            metadata_warning,
-        )
-        if reason
-    ]
-    app.state.retrieval_service = RetrievalService(
-        ai_provider=app.state.ai_provider,
-        vector_store=app.state.vector_store,
-    )
+    container = build_container()
+    app.state.container = container
 
     if settings.USE_S3 and settings.SCAN_INTERVAL_SECONDS > 0:
-        thread = threading.Thread(
-            target=_scanner_loop,
-            args=(app.state.ai_provider, app.state.vector_store, app.state.metadata_store),
-            daemon=True,
-        )
+        thread = threading.Thread(target=_scanner_loop, args=(container,), daemon=True)
         thread.start()
         log.info("Background S3 scanner thread started")
 
@@ -149,65 +107,61 @@ app = FastAPI(title="DE Vector Search Engine", lifespan=lifespan)
 
 @app.post("/search")
 def search(request: SearchRequest):
-    results = app.state.retrieval_service.search(request.query, top_k=request.top_k)
-    return {"request_id": str(uuid4()), "results": results}
+    request_id = str(uuid4())
+    results = app.state.container.search_sections.search(
+        request.query, top_k=request.top_k, request_id=request_id
+    )
+    return {
+        "request_id": request_id,
+        "results": [result.model_dump() for result in results],
+    }
 
 
 @app.post("/scan")
 def trigger_scan(request: ScanRequest, background_tasks: BackgroundTasks):
-    """Trigger a manual S3 scan and queue ingestion in the background."""
     if not _scan_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="scan already in progress")
-
     try:
-        jobs = S3Scanner(app.state.metadata_store).scan(
-            bucket=request.bucket,
-            prefix=request.prefix,
-        )
+        jobs = app.state.container.scan_documents.execute(bucket=request.bucket, prefix=request.prefix)
     finally:
         _scan_lock.release()
 
     if not jobs:
         return {"status": "scan started", "queued": 0}
 
-    background_tasks.add_task(
-        _run_jobs,
-        jobs,
-        app.state.ai_provider,
-        app.state.vector_store,
-        app.state.metadata_store,
-    )
+    background_tasks.add_task(_run_jobs, jobs, app.state.container)
     return {"status": "scan started", "queued": len(jobs)}
 
 
 @app.get("/status/{doc_id}")
 def get_status(doc_id: str):
-    doc = app.state.metadata_store.get_document(doc_id)
-    if doc is None:
+    result = app.state.container.get_document_status.execute(doc_id)
+    if result is None:
         raise HTTPException(status_code=404, detail=f"doc_id={doc_id} not found")
     return {
-        "doc_id": doc_id,
-        "status": doc.status,
-        "file_path": doc.file_path,
-        "file_type": doc.file_type,
-        "total_chunks": doc.total_chunks,
-        "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
-        "processed_at": doc.processed_at.isoformat() if doc.processed_at else None,
+        "doc_id": result.doc_id,
+        "status": result.status,
+        "file_path": result.file_path,
+        "source_s3_uri": result.source_s3_uri,
+        "markdown_s3_uri": result.markdown_s3_uri,
+        "file_type": result.file_type,
+        "section_count": result.section_count,
+        "parser_version": result.parser_version,
+        "caption_model": result.caption_model,
+        "embedding_model": result.embedding_model,
+        "uploaded_at": result.uploaded_at,
+        "processed_at": result.processed_at,
     }
 
 
 @app.get("/health")
 def health():
-    degraded_reasons = list(app.state.degraded_reasons)
-    if isinstance(app.state.ai_provider, MockAIProvider) and settings.AI_PROVIDER == "auto" and not settings.AI_API_KEY:
-        degraded_reasons.append("AI provider is running in mock fallback mode.")
-
+    container = app.state.container
+    degraded_reasons = list(container.degraded_reasons)
     status = "degraded" if degraded_reasons else "ok"
     payload = {
         "status": status,
-        "vector_store": app.state.vector_store.__class__.__name__,
-        "metadata_store": app.state.metadata_store.__class__.__name__,
-        "ai_provider": app.state.ai_provider.__class__.__name__,
+        **container.system_info,
         "scanner": "enabled" if (settings.USE_S3 and settings.SCAN_INTERVAL_SECONDS > 0) else "disabled",
         "degraded_reasons": degraded_reasons,
     }

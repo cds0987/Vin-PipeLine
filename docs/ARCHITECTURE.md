@@ -1,178 +1,166 @@
-# Architecture — DE Vector Search Engine
+# Architecture
 
-## System diagram
+## Kiến trúc đang áp dụng
+
+Runtime của service đi theo hướng `Markdown -> Section -> Caption -> Search`. Chunk 512 token không còn là retrieval unit.
+
+Luồng tổng quát:
 
 ```text
-┌──────────────────────────────────────┐
-│              BOUNDARY VÀO            │
-│                                      │
-│  S3 bucket                           │
-│  └─> S3 scanner (poll)               │
-│       └─> IngestJob                  │
-└──────────────────┬───────────────────┘
-                   │
-                   ▼
-       parse → clean → chunk → embed → index
-                   │
-         ┌─────────┴─────────┐
-         ▼                   ▼
-     Vector store       Metadata store
-   (Qdrant / memory)  (Postgres / file / memory)
-                   │
-┌──────────────────┘
-│              BOUNDARY RA             │
-│                                      │
-│  REST API                            │
-│  POST /search → embed query          │
-│               → vector search        │
-│               → kết quả về caller    │
-└──────────────────────────────────────┘
+S3 / local source
+  ->
+IngestJob
+  ->
+parse -> save markdown -> split sections -> caption -> embed -> index
+  ->
+Vector store + metadata store
+  ->
+/search
+  ->
+section-centric response
 ```
 
-## Phạm vi
+## Cấu trúc module
 
-Service làm đúng 2 việc:
+```text
+app/
+  domain/          ← model và rule nghiệp vụ, không phụ thuộc SDK
+  application/     ← use cases
+  ports/           ← contract giữa application và infrastructure
+  infrastructure/  ← implementation cụ thể (SDK, DB, storage)
+  bootstrap/       ← composition root duy nhất
 
-1. **Ingestion**: S3 scanner phát hiện file → pipeline 5 bước xử lý → lưu vào stores
-2. **Retrieval**: caller gọi `/search` → embed query → vector search → trả kết quả
-
-Không có API nhận tài liệu từ caller. Không có event bus. Nguồn tài liệu duy nhất là S3.
-
-## Lớp kiến trúc và vai trò
-
-### Pipeline core — `pipeline/`
-
-Chỉ biết 5 interface:
-
-```
-IngestJob | ChunkResult | AIProvider | VectorStore | MetadataStore
+api/               ← FastAPI endpoints (validate request, gọi use case, map response)
+utils/             ← backward-compat re-exports; new code không import trực tiếp
+models/            ← backward-compat alias (ChunkResult = SectionRecord)
+pipeline/          ← thin wrappers cũ; logic thật đã nằm trong app/
+retrieval/         ← thin wrapper cũ; logic thật là SearchSections use case
 ```
 
-Không biết: SDK cụ thể của OpenAI/Qdrant/Postgres, chi tiết HTTP API, chi tiết adapter.
+## `app/domain`
 
-Invariant: nếu một thay đổi khiến `pipeline/` phải import boto3, psycopg2, hay httpx → thiết kế sai chỗ.
+Model nghiệp vụ cốt lõi — không phụ thuộc FastAPI, SQLAlchemy, SDK nào:
 
-### Adapter layer — `adapters/`
-
-Adapter hấp thụ thay đổi ở rìa hệ thống. Production adapter duy nhất:
-
-- `S3Scanner` (`adapters/s3_adapter.py`): S3 object listing → `IngestJob[]`
-
-`FileAdapter` là dev/test tool — không phải luồng production.
-
-Khi upstream đổi nguồn input, sửa adapter trước, không sửa pipeline.
-
-### Store layer — `utils/stores.py`
-
-Tách "lưu gì" khỏi "lưu ở đâu":
-
-| Interface | Production | Fallback | Dev |
-|---|---|---|---|
-| `VectorStore` | `QdrantStore` | `InMemoryVectorStore` | `InMemoryVectorStore` |
-| `MetadataStore` | `SQLMetadataStore` | `FileMetadataStore` | `InMemoryMetadataStore` |
-
-Qdrant collection mặc định: `documents`. `doc_id` indexed dưới payload để xóa theo tài liệu.
-
-Ba bảng PostgreSQL: `documents`, `document_chunks`, `ingestion_jobs`.
-
-### Serving layer — `api/`
-
-FastAPI app. Các endpoint:
-
-| Endpoint | Vai trò |
+| Model | Mô tả |
 |---|---|
-| `POST /search` | **Luồng ra** — embed query, vector search, trả kết quả |
-| `POST /scan` | Operational — trigger thủ công S3 scanner (cùng logic tự động) |
-| `GET /status/{doc_id}` | Operational — trạng thái ingest |
-| `GET /health` | Operational — tình trạng stores và provider |
+| `IngestJob` | Mô tả file cần xử lý: `doc_id`, `file_uri`, `document_type`, `language` |
+| `MarkdownDocument` | Kết quả parse: `markdown_content`, `markdown_s3_uri`, `source_uri`, `parser_version` |
+| `SectionRecord` | Section đầy đủ: `section_id`, `doc_id`, `section_content`, `caption`, `heading`, `heading_path`, `section_order`, `embedding`, `markdown_s3_uri`, `source_s3_uri` |
+| `DocumentRecord` | Metadata document trong DB: status, `parser_version`, `caption_model`, `embedding_model`, timestamps |
+| `SectionSearchResult` | Response search: fields SectionRecord + `score`, `document_name` |
 
-`/scan` không phải luồng vào thứ hai — nó chỉ trigger scanner theo yêu cầu.
+Business rule: `app/domain/ingestion/policies.py` — `is_stale_indexing`.
 
-## Core contracts
+## `app/application`
 
-### `IngestJob`
+Use cases — orchestrate, không chứa SDK logic:
 
-```python
-class IngestJob(BaseModel):
-    doc_id: str                          # MD5 hash của S3 URI
-    file_uri: str                        # s3://bucket/key
-    language: str = "vi"                 # detect từ content bởi pipeline/run.py
-    document_type: str = "general"       # first path segment sau SCAN_PREFIX
-    s3_last_modified: datetime | None = None
-    file_name: str | None = None         # typed field từ scanner
-    metadata: dict = {}                  # extension point cho adapter-specific data
+| File | Use case |
+|---|---|
+| `ingest/run_ingest_job.py` | `RunIngestJob` — read → parse → store md → split → caption → embed → index |
+| `ingest/index_sections.py` | `DocumentIndexService` — ghi sections vào index + cập nhật DocumentRecord |
+| `search/search_sections.py` | `SearchSections` — embed query + search + trả `SectionSearchResult` |
+| `scan/scan_documents.py` | `ScanDocuments` — gọi scanner, trả danh sách `IngestJob` |
+| `status/get_document_status.py` | `GetDocumentStatus` — trả `DocumentStatusResult` từ repository |
+
+## `app/ports`
+
+Contract giữa application và infrastructure. Application chỉ được phép phụ thuộc vào ports, không được import trực tiếp infra:
+
+| File | Protocols |
+|---|---|
+| `parsing.py` | `DocumentParser` |
+| `storage.py` | `BinaryReader`, `MarkdownStore` |
+| `sectioning.py` | `SectionSplitter`, `SectionCaptioner` |
+| `ai.py` | `EmbeddingProvider`, `SectionEmbedder`, `CaptionProvider` |
+| `vector_index.py` | `SectionIndex` |
+| `repositories.py` | `DocumentRepository`, `IngestClaimRepository`, `JobLogRepository` |
+| `scanning.py` | `SourceScanner` |
+
+## `app/infrastructure`
+
+Implementation cụ thể cho từng port:
+
+| Folder | Implementations |
+|---|---|
+| `parser/` | `RouterDocumentParser` → gọi `pipeline/parsers/` |
+| `sectioning/` | `HeadingSectionSplitter` |
+| `ai/` | `AISectionCaptioner`, `AISectionEmbedder` |
+| `storage/` | `StorageBinaryReader`, `ArtifactMarkdownStore` |
+| `vector/` | `VectorStoreSectionIndex` (adapter), `QdrantStore`, `InMemoryVectorStore` |
+| `repositories/` | `MetadataStoreRepository` (adapter), `SQLMetadataStore`, `FileMetadataStore`, `InMemoryMetadataStore` |
+| `scanning/` | `S3SourceScanner` |
+
+## `app/bootstrap`
+
+`container.py` là composition root duy nhất:
+
+- Đọc environment để chọn implementation (Qdrant vs memory, Postgres vs file...)
+- Build tất cả infrastructure objects
+- Wire dependency vào use cases
+- Trả `Container` chỉ expose use cases + `degraded_reasons` + `system_info`
+- `api/main.py` không được biết implementation cụ thể nào đang dùng
+
+## Parser layer
+
+```text
+pipeline/parsers/
+  __init__.py    ← entry point duy nhất: run(file_bytes, suffix, ai_provider)
+  _text.py       ← text-like formats (.txt, .md, .html, .ipynb...)
+  _visual.py     ← visual/mixed formats (.pdf, .docx, .png...)
 ```
 
-### `ChunkResult`
+Được gọi bởi `RouterDocumentParser` trong `app/infrastructure/parser/router.py`.
 
-```python
-class ChunkResult(BaseModel):
-    chunk_id: str        # {doc_id}_chunk_{index:04d}
-    doc_id: str
-    content: str
-    embedding: list[float]
-    page_start: int | None = None
-    page_end: int | None = None
-    section: str | None = None
-    metadata: dict = {}  # {"s3_uri": "...", "embedding_model": "..."}
+## Dependency direction
+
+```
+api/
+  ↓
+app/application/
+  ↓
+app/ports/  ←  app/infrastructure/
+  ↓
+app/domain/
 ```
 
-## Bốn bất biến kiến trúc
+**Không được phép:**
+- `app/application/` import `boto3`, `openai`, `qdrant_client`, `sqlalchemy`
+- `app/domain/` import FastAPI, SQLAlchemy, bất kỳ provider nào
+- `api/main.py` tự build dependency hay truy cập implementation details của container
 
-### 1. Một entry point ingest chuẩn
+## Contract trả về
 
-`pipeline.run(job, ...)` là đường duy nhất. Scanner tạo `IngestJob`, orchestrator gọi pipeline — không có shortcut khác.
+`SectionSearchResult` — response của `/search`:
 
-Orchestrator chịu IO file. Parse stage chỉ nhận bytes đã được đọc sẵn.
+```json
+{
+  "section_id": "doc_123_section_0007",
+  "document_id": "doc_123",
+  "document_name": "travel_policy.pdf",
+  "caption": "Quy định về mức hoàn tiền tối đa...",
+  "section_content": "## Hoàn tiền vé máy bay\n...\n",
+  "heading_path": ["Chính sách công tác", "Hoàn tiền vé máy bay"],
+  "markdown_s3_uri": "s3://bucket/rag-derived/markdown/doc_123.md",
+  "source_s3_uri": "s3://bucket/raw/hr/travel_policy.pdf",
+  "score": 0.91
+}
+```
 
-### 2. Runtime đổi qua env vars
+`SectionRecord` — data contract trung gian qua pipeline:
 
-Đổi AI endpoint, model, Qdrant host, metadata store mode → config trước khi sửa code.
+- `section_id`, `doc_id`, `section_content`, `caption`, `embedding`
+- `heading` — heading text của section (leaf của `heading_path`)
+- `heading_path` — danh sách heading từ root đến section hiện tại
+- `section_order` — thứ tự 0-based trong document
+- `markdown_s3_uri`, `source_s3_uri`
 
-### 3. Testable mà không cần full infra
+## Backward compat (temporary)
 
-Mọi flow chính phải test được với `MockAIProvider` + `InMemoryVectorStore` + `InMemoryMetadataStore`. Nếu một thay đổi buộc test phụ thuộc vào real infra → dấu hiệu thiết kế sai.
+Các thứ còn tồn tại để không gãy tests và legacy code; sẽ bị xóa sau migration hoàn tất:
 
-### 4. Fallback phải nhìn thấy được
+- `models/ingest_job.py` — `ChunkResult = SectionRecord`, re-export domain models
+- `utils/stores.py` — re-export `QdrantStore`, `InMemoryVectorStore`, `SQLMetadataStore`...
+- `pipeline/run.py`, `pipeline/01_parse.py`... — thin wrappers
 
-Fallback hữu ích cho dev/test nhưng không được im lặng. `/health` phải báo `degraded` với `degraded_reasons` cụ thể. Build warnings phải được giữ lại.
-
-Builder contracts hiện tại:
-
-- `build_ai_provider() -> tuple[AIProvider, str | None]`
-- `build_vector_store() -> tuple[VectorStore, str | None]`
-- `build_metadata_store() -> tuple[MetadataStore, str | None]`
-
-## Hướng dẫn khi thêm tính năng mới
-
-### Thêm định dạng file
-
-Sửa `pipeline/01_parse.py`. Thêm suffix vào `_SUPPORTED_SUFFIXES` trong `adapters/s3_adapter.py`. Test tương ứng trong `tests/pipeline/`.
-
-### Thêm vector store mới
-
-Implement `VectorStore` protocol, nối vào `build_vector_store()` trong `utils/stores.py`.
-
-### Thêm metadata backend mới
-
-Implement `MetadataStore` protocol, nối vào `build_metadata_store()` trong `utils/stores.py`.
-
-### Thêm nguồn tài liệu mới (ngoài S3)
-
-Đây là thay đổi kiến trúc, không phải feature thông thường:
-
-1. Cập nhật `ARCHITECTURE.md` và `PIPELINE.md` trước — thiết kế trên docs
-2. Map nguồn mới về `IngestJob`
-3. Gọi `pipeline.run()`
-4. Đảm bảo không vi phạm nguyên tắc "chỉ 2 luồng qua ranh giới"
-
-## Checklist review thiết kế
-
-Trước khi merge thay đổi lớn:
-
-1. Thay đổi có phá vỡ `IngestJob` hoặc `ChunkResult` không?
-2. Có vi phạm nguyên tắc "chỉ 2 luồng" không?
-3. `pipeline/` có đang biết quá nhiều về infra không?
-4. Local test có còn chạy được với mock/in-memory không?
-5. `degraded`/fallback behavior có phản ánh qua `/health` không?
-6. `PIPELINE.md` đã cập nhật chưa?
+Xem `LEGACY.md` để biết đầy đủ.

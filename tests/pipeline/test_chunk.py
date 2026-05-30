@@ -2,48 +2,84 @@ from __future__ import annotations
 
 import importlib
 
+from app.domain.documents.models import MarkdownDocument
 from models.ingest_job import IngestJob
 
 chunk_module = importlib.import_module("pipeline.03_chunk")
 
 
-def test_chunk_sliding_window(monkeypatch):
-    monkeypatch.setattr("config.settings.CHUNK_SIZE", 6)
-    monkeypatch.setattr("config.settings.CHUNK_OVERLAP", 2)
-    pages = [(1, "one two three four five six seven eight nine ten eleven")]
+def test_split_by_heading_creates_multiple_sections():
+    markdown = MarkdownDocument(
+        doc_id="doc-1",
+        source_uri="data/sample/policy.txt",
+        markdown_content="# Policy\nIntro\n\n## Travel\nTravel body\n\n## Leave\nLeave body",
+    )
     job = IngestJob(doc_id="doc-1", file_uri="data/sample/policy.txt")
 
-    chunks = chunk_module.run(pages, job)
+    sections = chunk_module.run(markdown, job)
 
-    assert [chunk.chunk_id for chunk in chunks] == [
-        "doc-1_chunk_0000",
-        "doc-1_chunk_0001",
-        "doc-1_chunk_0002",
+    assert [section.section_id for section in sections] == [
+        "doc-1_section_0000",
+        "doc-1_section_0001",
+        "doc-1_section_0002",
     ]
-    assert chunks[0].content == "one two three four five six"
-    assert chunks[1].content.startswith("five six seven eight")
-    assert chunks[0].metadata["chunk_strategy"] == "sliding_window"
+    assert sections[0].section_content.startswith("# Policy")
+    assert sections[1].heading_path == ["Policy", "Travel"]
+    assert sections[2].heading_path == ["Policy", "Leave"]
 
 
-def test_chunk_page_tracking(monkeypatch):
-    monkeypatch.setattr("config.settings.CHUNK_SIZE", 10)
-    monkeypatch.setattr("config.settings.CHUNK_OVERLAP", 0)
-    pages = [
-        (1, "page one content here"),
-        (2, "page two content here"),
-    ]
+def test_split_populates_heading_leaf():
+    markdown = MarkdownDocument(
+        doc_id="doc-h",
+        source_uri="data/sample/policy.txt",
+        markdown_content="# Top\nText\n\n## Sub\nMore text",
+    )
+    job = IngestJob(doc_id="doc-h", file_uri="data/sample/policy.txt")
+
+    sections = chunk_module.run(markdown, job)
+
+    # heading must be the leaf (last element of heading_path)
+    assert sections[0].heading == "Top"
+    assert sections[1].heading == "Sub"
+
+
+def test_split_populates_section_order():
+    markdown = MarkdownDocument(
+        doc_id="doc-ord",
+        source_uri="data/sample/policy.txt",
+        markdown_content="# A\nBody A\n\n# B\nBody B\n\n# C\nBody C",
+    )
+    job = IngestJob(doc_id="doc-ord", file_uri="data/sample/policy.txt")
+
+    sections = chunk_module.run(markdown, job)
+
+    assert [s.section_order for s in sections] == [0, 1, 2]
+
+
+def test_split_without_headings_returns_single_section():
+    # Content with no headings → _split_markdown collects everything into one
+    # section (heading_path=[]), so the document is preserved intact.
+    markdown = MarkdownDocument(
+        doc_id="doc-2",
+        source_uri="data/sample/policy.txt",
+        markdown_content="paragraph one\n\nparagraph two\n\nparagraph three",
+    )
     job = IngestJob(doc_id="doc-2", file_uri="data/sample/policy.txt")
 
-    chunks = chunk_module.run(pages, job)
+    sections = chunk_module.run(markdown, job)
 
-    assert chunks
-    for chunk in chunks:
-        assert chunk.page_start is not None
-        assert chunk.page_end is not None
-    assert chunks[0].page_start == 1
+    assert len(sections) == 1
+    assert sections[0].heading_path == []
+    assert "paragraph one" in sections[0].section_content
+    assert "paragraph three" in sections[0].section_content
 
 
-def test_chunk_empty_pages_returns_empty():
+def test_split_empty_markdown_returns_empty():
+    markdown = MarkdownDocument(
+        doc_id="doc-3",
+        source_uri="data/sample/policy.txt",
+        markdown_content="",
+    )
     job = IngestJob(doc_id="doc-3", file_uri="data/sample/policy.txt")
-    chunks = chunk_module.run([], job)
-    assert chunks == []
+    sections = chunk_module.run(markdown, job)
+    assert sections == []

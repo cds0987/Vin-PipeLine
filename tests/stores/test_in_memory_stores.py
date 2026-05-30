@@ -14,8 +14,13 @@ from utils.stores import InMemoryMetadataStore, InMemoryVectorStore, _cosine_sim
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _chunk(chunk_id: str, doc_id: str, vec: list[float], content: str = "c") -> ChunkResult:
-    return ChunkResult(chunk_id=chunk_id, doc_id=doc_id, content=content, embedding=vec)
+def _chunk(section_id: str, doc_id: str, vec: list[float], section_content: str = "c") -> ChunkResult:
+    return ChunkResult(
+        section_id=section_id,
+        doc_id=doc_id,
+        section_content=section_content,
+        embedding=vec,
+    )
 
 
 def _doc(doc_id: str, status: str = "indexed", file_path: str = "s3://b/f.pdf") -> DocumentRecord:
@@ -59,11 +64,11 @@ def test_cosine_symmetry():
 
 # ─── InMemoryVectorStore — basic ──────────────────────────────────────────────
 
-def test_upsert_and_search_finds_chunk():
+def test_upsert_and_search_finds_section():
     store = InMemoryVectorStore()
     store.upsert([_chunk("c1", "doc1", [1.0, 0.0])])
     results = store.search([1.0, 0.0], top_k=5)
-    assert any(r.chunk_id == "c1" for r in results)
+    assert any(r.section_id == "c1" for r in results)
 
 
 def test_empty_store_returns_empty():
@@ -97,14 +102,14 @@ def test_search_attaches_score_to_metadata():
 
 # ─── InMemoryVectorStore — upsert overwrites ─────────────────────────────────
 
-def test_upsert_same_chunk_id_overwrites():
+def test_upsert_same_section_id_overwrites():
     store = InMemoryVectorStore()
-    store.upsert([_chunk("c1", "doc1", [1.0, 0.0], content="original")])
-    store.upsert([_chunk("c1", "doc1", [1.0, 0.0], content="updated")])
+    store.upsert([_chunk("c1", "doc1", [1.0, 0.0], section_content="original")])
+    store.upsert([_chunk("c1", "doc1", [1.0, 0.0], section_content="updated")])
     results = store.search([1.0, 0.0], top_k=5)
-    matching = [r for r in results if r.chunk_id == "c1"]
+    matching = [r for r in results if r.section_id == "c1"]
     assert len(matching) == 1
-    assert matching[0].content == "updated"
+    assert matching[0].section_content == "updated"
 
 
 # ─── InMemoryVectorStore — delete ─────────────────────────────────────────────

@@ -62,19 +62,22 @@ def test_search_threshold_zero_does_not_filter(monkeypatch, fake_ai_provider, ve
     from adapters.file_adapter import FileAdapter
     from pipeline.run import run
     import api.main as api_main
-    from retrieval.service import RetrievalService
     from fastapi.testclient import TestClient
+    from app.bootstrap.container import build_container
 
     monkeypatch.setattr("config.settings.SEARCH_SCORE_THRESHOLD", 0.0)
-    monkeypatch.setattr(api_main, "build_ai_provider", lambda: (fake_ai_provider, None))
-    monkeypatch.setattr(api_main, "build_vector_store", lambda: (vector_store, None))
-    monkeypatch.setattr(api_main, "build_metadata_store", lambda: (metadata_store, None))
+    container = build_container(
+        ai_provider=fake_ai_provider,
+        vector_store=vector_store,
+        metadata_store=metadata_store,
+    )
+    monkeypatch.setattr(api_main, "build_container", lambda: container)
 
     with TestClient(api_main.app) as client:
         job = FileAdapter().map("data/sample/policy.txt", doc_id="doc-threshold-zero")
         run(job, ai_provider=fake_ai_provider, vector_store=vector_store, metadata_store=metadata_store)
 
-        # With threshold=0.0 every chunk should pass the filter
+        # With threshold=0.0 every indexed section should pass the filter.
         body = client.post("/search", json={"query": "policy", "top_k": 50}).json()
         assert body["results"]  # at least one result must come through
 
@@ -93,7 +96,7 @@ def test_status_response_includes_uploaded_at(api_client, fake_ai_provider, vect
     assert body["uploaded_at"] is not None
 
 
-def test_status_response_includes_total_chunks(api_client, fake_ai_provider, vector_store, metadata_store):
+def test_status_response_includes_section_count(api_client, fake_ai_provider, vector_store, metadata_store):
     from adapters.file_adapter import FileAdapter
     from pipeline.run import run
 
@@ -101,7 +104,8 @@ def test_status_response_includes_total_chunks(api_client, fake_ai_provider, vec
     run(job, ai_provider=fake_ai_provider, vector_store=vector_store, metadata_store=metadata_store)
 
     body = api_client.get("/status/doc-chunks").json()
-    assert "total_chunks" in body
+    assert "section_count" in body
+    assert body["section_count"] >= 1
 
 
 def test_status_response_includes_file_type(api_client, fake_ai_provider, vector_store, metadata_store):
@@ -121,11 +125,11 @@ def test_status_response_includes_file_type(api_client, fake_ai_provider, vector
 def test_scan_returns_zero_queued_when_no_new_files(api_client, monkeypatch):
     import api.main as api_main
 
-    class _EmptyScanner:
-        def __init__(self, _): pass
-        def scan(self, bucket=None, prefix=None): return []
+    class _EmptyScanDocuments:
+        def execute(self, bucket=None, prefix=None):
+            return []
 
-    monkeypatch.setattr("api.main.S3Scanner", _EmptyScanner)
+    api_main.app.state.container.scan_documents = _EmptyScanDocuments()
 
     body = api_client.post("/scan", json={}).json()
     assert body["status"] == "scan started"
@@ -138,3 +142,31 @@ def test_health_scanner_disabled_when_use_s3_false(api_client, monkeypatch):
     monkeypatch.setattr("config.settings.USE_S3", False)
     body = api_client.get("/health").json()
     assert body["scanner"] == "disabled"
+
+
+# ─── /search — query max length ───────────────────────────────────────────────
+
+def test_search_query_at_max_length_is_valid(api_client):
+    # SEARCH_QUERY_MAX_LENGTH defaults to 2000; a 2000-char query must pass.
+    from config import settings
+    query = "q" * settings.SEARCH_QUERY_MAX_LENGTH
+    resp = api_client.post("/search", json={"query": query, "top_k": 5})
+    assert resp.status_code == 200
+
+
+def test_search_query_exceeding_max_length_returns_422(api_client):
+    # SearchRequest.query max_length is set at Pydantic class definition time
+    # from settings.SEARCH_QUERY_MAX_LENGTH (default 2000).
+    from config import settings
+    query = "q" * (settings.SEARCH_QUERY_MAX_LENGTH + 1)
+    resp = api_client.post("/search", json={"query": query, "top_k": 5})
+    assert resp.status_code == 422
+
+
+def test_search_request_id_is_unique_per_call(api_client):
+    """Each /search call must produce a distinct request_id."""
+    ids = {
+        api_client.post("/search", json={"query": "q"}).json()["request_id"]
+        for _ in range(5)
+    }
+    assert len(ids) == 5

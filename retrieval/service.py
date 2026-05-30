@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections import OrderedDict
-
-from config import settings
+from app.application.search.search_sections import SearchSections
+from app.infrastructure.vector.section_index import VectorStoreSectionIndex
 from utils.ai_provider import AIProvider, build_ai_provider
 from utils.stores import VectorStore, build_vector_store
 
@@ -13,41 +12,22 @@ class RetrievalService:
         ai_provider: AIProvider | None = None,
         vector_store: VectorStore | None = None,
     ) -> None:
-        self._ai_provider = ai_provider or build_ai_provider()[0]
-        self._vector_store = vector_store or build_vector_store()[0]
-        self._query_cache: OrderedDict[str, list[float]] = OrderedDict()
-
-    def _embed_query(self, query: str) -> list[float]:
-        cached = self._query_cache.get(query)
-        if cached is not None:
-            self._query_cache.move_to_end(query)
-            return cached
-
-        query_vector = self._ai_provider.embed([query])[0]
-        self._query_cache[query] = query_vector
-        if len(self._query_cache) > settings.SEARCH_QUERY_CACHE_SIZE:
-            self._query_cache.popitem(last=False)
-        return query_vector
+        resolved_ai = ai_provider or build_ai_provider()[0]
+        resolved_vector = vector_store or build_vector_store()[0]
+        self._search = SearchSections(resolved_ai, VectorStoreSectionIndex(resolved_vector))
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
-        query_vector = self._embed_query(query)
-        threshold = settings.SEARCH_SCORE_THRESHOLD
-        # Fetch more candidates when threshold filtering is active so that
-        # callers always receive up to top_k results after filtering.
-        fetch_k = top_k * 3 if threshold > 0.0 else top_k
-        chunks = self._vector_store.search(query_vector, top_k=fetch_k)
-        results = [
+        return [
             {
-                "chunk_id": chunk.chunk_id,
-                "content": chunk.content,
-                "score": chunk.metadata.get("score"),
-                "s3_uri": chunk.metadata.get("s3_uri"),
-                "page_start": chunk.page_start,
-                "page_end": chunk.page_end,
-                "section": chunk.section,
-                "doc_id": chunk.doc_id,
+                "section_id": result.section_id,
+                "document_id": result.document_id,
+                "document_name": result.document_name,
+                "caption": result.caption,
+                "section_content": result.section_content,
+                "markdown_s3_uri": result.markdown_s3_uri,
+                "source_s3_uri": result.source_s3_uri,
+                "score": result.score,
+                "heading_path": result.heading_path,
             }
-            for chunk in chunks
-            if threshold == 0.0 or (chunk.metadata.get("score") or 0.0) >= threshold
+            for result in self._search.search(query, top_k=top_k)
         ]
-        return results[:top_k]

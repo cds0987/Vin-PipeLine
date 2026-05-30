@@ -44,10 +44,18 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://rag:rag@postgres:5432/ragdb"
 
     s3_bucket: str = "rag-pipeline-local"
+    markdown_bucket: str | None = None
+    markdown_s3_prefix: str = "rag-derived/markdown"
     use_s3: bool = False
     s3_endpoint: str = "http://minio:9000"
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
+
+    section_fallback_max_chars: int = 2400
+    section_fallback_paragraphs: int = 3
+    caption_max_chars: int = 280
+    caption_model: str = "heuristic"
+    parser_version: str = "pipeline.parsers.v1"
 
     scan_interval_seconds: int = 300   # S3 poll interval; 0 = disable background scanner
     scan_prefix: str = ""              # S3 key prefix to scan, e.g. "raw/"
@@ -119,10 +127,18 @@ METADATA_STORE = _settings.metadata_store
 DB_URL = _settings.database_url
 
 S3_BUCKET = _settings.s3_bucket
+MARKDOWN_BUCKET = _settings.markdown_bucket or _settings.s3_bucket
+MARKDOWN_S3_PREFIX = _settings.markdown_s3_prefix
 USE_S3 = _settings.use_s3
 S3_ENDPOINT = _settings.s3_endpoint
 AWS_ACCESS_KEY_ID: str | None = _settings.aws_access_key_id
 AWS_SECRET_ACCESS_KEY: str | None = _settings.aws_secret_access_key
+
+SECTION_FALLBACK_MAX_CHARS = _settings.section_fallback_max_chars
+SECTION_FALLBACK_PARAGRAPHS = _settings.section_fallback_paragraphs
+CAPTION_MAX_CHARS = _settings.caption_max_chars
+CAPTION_MODEL = _settings.caption_model
+PARSER_VERSION = _settings.parser_version
 
 SCAN_INTERVAL_SECONDS = _settings.scan_interval_seconds
 SCAN_PREFIX = _settings.scan_prefix
@@ -140,12 +156,6 @@ DB_MAX_OVERFLOW = _settings.db_max_overflow
 def validate_runtime_settings() -> None:
     if EMBEDDING_DIM <= 0:
         raise ValueError("EMBEDDING_DIM must be greater than 0.")
-    if CHUNK_SIZE <= 0:
-        raise ValueError("CHUNK_SIZE must be greater than 0.")
-    if CHUNK_OVERLAP < 0:
-        raise ValueError("CHUNK_OVERLAP must be greater than or equal to 0.")
-    if CHUNK_OVERLAP >= CHUNK_SIZE:
-        raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
     if SCAN_MAX_WORKERS <= 0:
         raise ValueError("SCAN_MAX_WORKERS must be greater than 0.")
     if SEARCH_SCORE_THRESHOLD < 0.0 or SEARCH_SCORE_THRESHOLD > 1.0:
@@ -166,6 +176,12 @@ def validate_runtime_settings() -> None:
         raise ValueError("PDF_RENDER_SCALE must be greater than 0.")
     if PDF_OCR_MAX_WORKERS <= 0:
         raise ValueError("PDF_OCR_MAX_WORKERS must be greater than 0.")
+    if SECTION_FALLBACK_MAX_CHARS <= 0:
+        raise ValueError("SECTION_FALLBACK_MAX_CHARS must be greater than 0.")
+    if SECTION_FALLBACK_PARAGRAPHS <= 0:
+        raise ValueError("SECTION_FALLBACK_PARAGRAPHS must be greater than 0.")
+    if CAPTION_MAX_CHARS <= 0:
+        raise ValueError("CAPTION_MAX_CHARS must be greater than 0.")
     if EMBED_RETRY_BACKOFF_SECONDS < 0 or OCR_RETRY_BACKOFF_SECONDS < 0:
         raise ValueError("Retry backoff values must be greater than or equal to 0.")
     if not LOCAL_FILE_ROOT.exists():

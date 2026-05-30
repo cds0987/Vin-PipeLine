@@ -12,5 +12,6 @@ class FileAdapter:
         return IngestJob(
             doc_id=doc_id or str(uuid4()),
             file_uri=file_path,
+            file_name=file_name,
             metadata={"file_name": file_name},
         )

@@ -9,6 +9,8 @@ pypdf>=4.0.0
 pymupdf>=1.24.0
 python-docx==1.1.0
 pytesseract==0.3.10
+markitdown[all]>=0.1.0
+python-pptx>=1.0.0
 
 # AI / Embedding
 openai==1.30.0

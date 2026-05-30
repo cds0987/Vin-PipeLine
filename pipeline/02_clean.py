@@ -13,8 +13,15 @@ def _normalize(text: str) -> str:
     return normalized.strip()
 
 
-def run(pages: list[tuple[int, str]]) -> list[tuple[int, str]]:
-    """Normalize text in each page; drop pages that become empty after cleaning."""
+def run(pages: list[tuple[int, str]] | str) -> list[tuple[int, str]] | str:
+    """Normalize text while keeping backward compatibility.
+
+    - ``list[tuple[int, str]]`` in legacy page-based flow
+    - ``str`` in newer Markdown-first flow
+    """
+    if isinstance(pages, str):
+        return _normalize(pages)
+
     result = []
     for page_num, text in pages:
         cleaned = _normalize(text)

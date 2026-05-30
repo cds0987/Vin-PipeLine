@@ -20,11 +20,11 @@ def _make_embedding(seed: int = 0) -> list[float]:
 
 def _make_chunk(doc_id: str, idx: int, content: str) -> ChunkResult:
     return ChunkResult(
-        chunk_id=f"{doc_id}_chunk_{idx:04d}",
+        section_id=f"{doc_id}_section_{idx:04d}",
         doc_id=doc_id,
-        content=content,
+        section_content=content,
         embedding=_make_embedding(idx),
-        metadata={"chunk_index": idx},
+        metadata={"section_index": idx},
     )
 
 
@@ -54,8 +54,8 @@ def test_search_returns_correct_fields(store):
     hit = next((r for r in results if r.doc_id == "ci-doc-a"), None)
 
     assert hit is not None
-    assert hit.chunk_id == "ci-doc-a_chunk_0000"
-    assert "Qdrant Cloud" in hit.content
+    assert hit.section_id == "ci-doc-a_section_0000"
+    assert "Qdrant Cloud" in hit.section_content
     assert isinstance(hit.metadata.get("score"), float)
 
 
@@ -67,7 +67,7 @@ def test_idempotent_upsert(store):
     hits = [r for r in results if r.doc_id == "ci-doc-a"]
 
     assert len(hits) == 1
-    assert hits[0].content == "Updated content - idempotent upsert"
+    assert hits[0].section_content == "Updated content - idempotent upsert"
 
 
 def test_delete_removes_doc(store):

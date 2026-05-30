@@ -26,11 +26,13 @@ Factory functions để tạo domain objects với default hợp lý — không 
 ```python
 from tests.factories import make_ingest_job, make_chunk_result, make_chunk_list, make_document_record
 
-job   = make_ingest_job(doc_id="x", file_uri="s3://b/a.pdf")
-chunk = make_chunk_result(doc_id="x", index=0, content="hello")
-chunks = make_chunk_list(doc_id="x", count=5)
-doc   = make_document_record(doc_id="x", status="indexed")
+job     = make_ingest_job(doc_id="x", file_uri="s3://b/a.pdf")
+section = make_chunk_result(doc_id="x", index=0, content="hello")  # trả SectionRecord (ChunkResult là alias)
+sections = make_chunk_list(doc_id="x", count=5)
+doc     = make_document_record(doc_id="x", status="indexed")
 ```
+
+`SectionRecord` hiện có thêm các field: `heading` (str), `heading_path` (list[str]), `section_order` (int). `make_chunk_result` populate defaults cho các field này.
 
 ### Domain conftest files
 
@@ -96,11 +98,12 @@ Mỗi mục là behavior chưa có test. Thêm vào file đã ghi — tạo file
 - [ ] không có job mới → `queued=0`
 - [ ] bucket/prefix override → truyền đúng xuống scanner
 
-**`/status/{doc_id}`** → `tests/api/test_status.py` *(tạo mới)*
+**`/status/{doc_id}`** → `tests/api/test_status.py`
 
 - [ ] doc không tồn tại → `404`
-- [ ] doc indexed → có `total_chunks` và `processed_at`
+- [ ] doc indexed → có `section_count`, `processed_at`, `parser_version`, `caption_model`, `embedding_model`
 - [ ] doc failed → `status` đúng
+- [ ] `markdown_s3_uri` và `source_s3_uri` có mặt trong response
 
 **`/health`** → `tests/api/test_health.py` *(tạo mới)*
 
@@ -115,9 +118,12 @@ Mỗi mục là behavior chưa có test. Thêm vào file đã ghi — tạo file
 - [ ] parse PDF không text layer, OCR disabled → fail rõ ràng — `test_parse_ocr.py`
 - [ ] parse file unsupported suffix → fail sớm — `test_parse_formats.py`
 - [ ] clean → loại page rỗng đúng — `test_clean.py`
-- [ ] chunk → `page_start/page_end` hợp lý — `test_chunk.py`
+- [ ] split section → `heading`, `heading_path`, `section_order` populate đúng — `test_chunk.py`
+- [ ] split section → fallback khi không có heading → sinh section với `Untitled` — `test_chunk.py`
 - [ ] embed → dimension mismatch fail — `test_embed.py`
+- [ ] embed → caption được embed (không phải section_content raw) — `test_embed.py`
 - [ ] index → re-run cùng `doc_id` idempotent ở vector level — `test_index.py`
+- [ ] index → payload chứa `heading`, `section_order`, `markdown_s3_uri`, `source_s3_uri` — `test_index.py`
 - [ ] deadline timeout → ghi failed job — `test_run_extended.py`
 - [ ] `try_claim_ingest()` → skip khi doc đang indexing chưa stale — `test_run_extended.py`
 
@@ -142,10 +148,12 @@ Mỗi mục là behavior chưa có test. Thêm vào file đã ghi — tạo file
 → `tests/stores/` *(Qdrant integration: marker `qdrant`)*
 
 - [ ] `QdrantStore` detect dimension mismatch của collection — `test_qdrant_integration.py`
-- [ ] `build_vector_store()` fallback → set warning — `test_in_memory_stores.py`
-- [ ] `build_metadata_store()` fallback → set warning — `test_in_memory_stores.py`
-- [ ] `FileMetadataStore` → giữ document status và job history sau nhiều lần ghi — `test_in_memory_stores.py`
-- [ ] `SQLMetadataStore` → stale chunk cleanup — `test_qdrant_integration.py` hoặc file riêng
+- [ ] `QdrantStore.search` populate `heading`, `section_order` từ payload — `test_qdrant_integration.py`
+- [ ] `build_vector_store()` fallback → set warning — `test_build_fallbacks.py`
+- [ ] `build_metadata_store()` fallback → set warning — `test_build_fallbacks.py`
+- [ ] `FileMetadataStore` → giữ document status và job history sau nhiều lần ghi — `test_file_metadata_store.py`
+- [ ] `InMemoryVectorStore` → upsert dùng `section_id` (không phải `chunk_id`) làm key — `test_in_memory_stores.py`
+- [ ] `SQLMetadataStore` → stale indexing reclaims sau timeout — `test_sql_metadata_store.py`
 
 ### Non-functional
 

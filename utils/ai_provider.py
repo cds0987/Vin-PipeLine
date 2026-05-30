@@ -14,7 +14,13 @@ class AIProvider(Protocol):
     def embed(self, texts: list[str]) -> list[list[float]]:
         ...
 
+    def caption(self, texts: list[str]) -> list[str]:
+        ...
+
     def ocr(self, image_bytes: bytes) -> str:
+        ...
+
+    def get_llm_client(self) -> Any | None:
         ...
 
 
@@ -55,6 +61,38 @@ class OpenAIProvider:
                 time.sleep(settings.EMBED_RETRY_BACKOFF_SECONDS * attempt)
         return []
 
+    def caption(self, texts: list[str]) -> list[str]:
+        if not texts:
+            return []
+        captions: list[str] = []
+        for text in texts:
+            snippet = text.strip()
+            if not snippet:
+                captions.append("")
+                continue
+            response = self._client.chat.completions.create(
+                model=self._vision_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You summarize document sections for enterprise retrieval. "
+                            "Return a concise 2-3 sentence caption in the same language as the input."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Section content:\n\n{snippet[:6000]}",
+                    },
+                ],
+                temperature=0.1,
+            )
+            captions.append((response.choices[0].message.content or "").strip())
+        return captions
+
+    def get_llm_client(self) -> Any:
+        return self._client
+
     def ocr(self, image_bytes: bytes) -> str:
         attempts = max(1, settings.OCR_MAX_RETRIES)
         b64_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -87,7 +125,7 @@ class MockAIProvider:
     """Deterministic mock provider for local dev/test before real API credentials are ready."""
 
     def __init__(self, dimension: int | None = None) -> None:
-        self._dimension = dimension or min(settings.EMBEDDING_DIM, 32)
+        self._dimension = dimension or settings.EMBEDDING_DIM
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         embeddings: list[list[float]] = []
@@ -100,6 +138,12 @@ class MockAIProvider:
             embeddings.append(vector)
         return embeddings
 
+    def caption(self, texts: list[str]) -> list[str]:
+        return [_heuristic_caption(text) for text in texts]
+
+    def get_llm_client(self) -> None:
+        return None
+
     def ocr(self, image_bytes: bytes) -> str:
         return "[mock-ocr] OCR is disabled in mock mode."
 
@@ -111,6 +155,20 @@ def _normalize_optional_value(value: str | None) -> str | None:
     if not normalized or normalized.lower() in {"none", "null"}:
         return None
     return normalized
+
+
+def _heuristic_caption(text: str) -> str:
+    normalized = " ".join(text.split())
+    if not normalized:
+        return ""
+    sentences = [part.strip() for part in normalized.replace("?", ".").replace("!", ".").split(".") if part.strip()]
+    if sentences:
+        caption = ". ".join(sentences[:2]).strip()
+        if not caption.endswith("."):
+            caption += "."
+    else:
+        caption = normalized[: settings.CAPTION_MAX_CHARS].strip()
+    return caption[: settings.CAPTION_MAX_CHARS].strip()
 
 
 def build_ai_provider() -> tuple[AIProvider, str | None]:

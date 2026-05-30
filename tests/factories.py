@@ -3,7 +3,7 @@ Test data factories — build domain objects with sane defaults.
 
 Usage:
     job = make_ingest_job(doc_id="x", file_uri="s3://b/a.pdf")
-    chunk = make_chunk_result(doc_id="x", index=0, content="hello")
+    section = make_chunk_result(doc_id="x", index=0, section_content="hello")
     doc = make_document_record(doc_id="x", status="indexed")
 """
 from __future__ import annotations
@@ -28,9 +28,9 @@ def make_ingest_job(**kwargs) -> IngestJob:
 def make_chunk_result(index: int = 0, **kwargs) -> ChunkResult:
     doc_id = kwargs.get("doc_id", "test-doc-001")
     defaults: dict = dict(
-        chunk_id=f"{doc_id}_chunk_{index:04d}",
+        section_id=f"{doc_id}_section_{index:04d}",
         doc_id=doc_id,
-        content="sample chunk content for testing",
+        section_content="sample section content for testing",
         embedding=[0.0] * settings.EMBEDDING_DIM,
         page_start=1,
         page_end=1,
@@ -39,7 +39,10 @@ def make_chunk_result(index: int = 0, **kwargs) -> ChunkResult:
 
 
 def make_chunk_list(doc_id: str = "test-doc-001", count: int = 3) -> list[ChunkResult]:
-    return [make_chunk_result(doc_id=doc_id, index=i, content=f"chunk {i} content") for i in range(count)]
+    return [
+        make_chunk_result(doc_id=doc_id, index=i, section_content=f"section {i} content")
+        for i in range(count)
+    ]
 
 
 def make_document_record(**kwargs) -> DocumentRecord:

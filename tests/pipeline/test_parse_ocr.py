@@ -1,51 +1,90 @@
+"""
+Tests for OCR fallback behaviour in pipeline.parsers._visual.
+
+The visual parser has two OCR paths:
+  1. Standalone images (.png/.jpg/…) → direct OCR via AIProvider.ocr()
+  2. Mixed documents (.pdf/.docx/…) with no LLM client → text-only extraction
+
+These tests verify the _parse_image path (standalone images), since
+that is the publicly testable OCR integration point.
+"""
 from __future__ import annotations
 
-import importlib
-import sys
-import types
+import io
 
 
-parse_module = importlib.import_module("pipeline.01_parse")
+class _TrackingOCR:
+    """OCR provider that records every call and returns configurable text."""
 
-
-class _FakeReader:
-    def __init__(self, *_args, **_kwargs) -> None:
-        self.pages = [types.SimpleNamespace(extract_text=lambda: "", images=[])]
-
-
-class _OCRProvider:
-    def __init__(self) -> None:
+    def __init__(self, response: str = "ocr from rendered page") -> None:
         self.calls: list[bytes] = []
+        self._response = response
+
+    def ocr(self, image_bytes: bytes) -> str:
+        self.calls.append(image_bytes)
+        return self._response
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [[0.0] for _ in texts]
 
-    def ocr(self, image_bytes: bytes) -> str:
-        self.calls.append(image_bytes)
-        return "ocr from rendered page"
+    def caption(self, texts: list[str]) -> list[str]:
+        return texts
+
+    def get_llm_client(self):
+        return None
 
 
-def test_parse_pdf_falls_back_to_rendered_page_ocr(monkeypatch):
-    monkeypatch.setitem(sys.modules, "pypdf", types.SimpleNamespace(PdfReader=_FakeReader))
+def _make_png_bytes() -> bytes:
+    """Create a minimal PNG image in memory."""
+    from PIL import Image
 
-    fake_document = types.SimpleNamespace(
-        load_page=lambda _index: types.SimpleNamespace(
-            get_pixmap=lambda **_kwargs: types.SimpleNamespace(tobytes=lambda _fmt: b"rendered-page")
-        ),
-        close=lambda: None,
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "fitz",
-        types.SimpleNamespace(
-            Matrix=lambda *_args: object(),
-            open=lambda **_kwargs: fake_document,
-        ),
-    )
+    img = Image.new("RGB", (50, 50), "white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
-    ai_provider = _OCRProvider()
 
-    pages = parse_module._parse_pdf(b"%PDF-1.4", ai_provider)
+# ─── _parse_image (standalone image → direct OCR) ─────────────────────────────
 
-    assert pages == [(1, "ocr from rendered page")]
-    assert ai_provider.calls == [b"rendered-page"]
+def test_parse_image_calls_ocr_with_raw_bytes():
+    from pipeline.parsers import _visual
+
+    raw = _make_png_bytes()
+    provider = _TrackingOCR("some ocr text here")
+    _visual.run(raw, ".png", provider)
+
+    assert provider.calls == [raw]
+
+
+def test_parse_image_returns_ocr_text():
+    from pipeline.parsers import _visual
+
+    provider = _TrackingOCR("policy content from OCR")
+    result = _visual.run(_make_png_bytes(), ".png", provider)
+
+    assert "policy content from OCR" in result
+
+
+def test_parse_image_returns_empty_when_ocr_too_short():
+    from pipeline.parsers import _visual
+
+    provider = _TrackingOCR("short")  # < _MIN_OCR_CHARS threshold
+    result = _visual.run(_make_png_bytes(), ".png", provider)
+
+    assert result == ""
+
+
+def test_parse_image_works_for_jpg():
+    from pipeline.parsers import _visual
+
+    from PIL import Image
+
+    img = Image.new("RGB", (50, 50), "white")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    provider = _TrackingOCR("jpeg ocr content here")
+
+    result = _visual.run(buf.getvalue(), ".jpg", provider)
+
+    assert provider.calls != []
+    assert "jpeg ocr content" in result
