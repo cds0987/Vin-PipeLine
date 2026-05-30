@@ -152,6 +152,18 @@ jobs:
             --zone asia-southeast1-a \
             --project vintravel-chatbot
 
+      - name: Apply k8s secret
+        run: |
+          kubectl create secret generic vin-pipeline-secret \
+            --from-literal=DATABASE_URL=${{ secrets.DATABASE_URL }} \
+            --from-literal=QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }} \
+            --from-literal=AI_API_KEY=${{ secrets.AI_API_KEY }} \
+            --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            --from-literal=S3_ENDPOINT=${{ secrets.S3_ENDPOINT }} \
+            --from-literal=S3_BUCKET=${{ secrets.S3_BUCKET }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Deploy to GKE
         run: |
           kubectl apply -f k8s/configmap.yaml
