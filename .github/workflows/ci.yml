@@ -10,6 +10,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+      k8s: ${{ steps.filter.outputs.k8s }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            app:
+              - 'api/**'
+              - 'pipeline/**'
+              - 'retrieval/**'
+              - 'adapters/**'
+              - 'utils/**'
+              - 'models/**'
+              - 'db/**'
+              - 'migrations/**'
+              - 'docker/**'
+              - 'requirements.txt'
+            k8s:
+              - 'k8s/**'
+
   pytest:
     runs-on: ubuntu-latest
     env:
@@ -35,6 +60,8 @@ jobs:
 
   docker-test:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     env:
       AI_PROVIDER: mock
       VECTOR_STORE: memory
@@ -115,8 +142,14 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    needs: [pytest, docker-test]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [pytest, docker-test, changes]
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      needs.pytest.result == 'success' &&
+      (needs.docker-test.result == 'success' || needs.docker-test.result == 'skipped') &&
+      (needs.changes.outputs.app == 'true' || needs.changes.outputs.k8s == 'true')
     permissions:
       contents: read
       id-token: write
@@ -134,9 +167,11 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
+        if: needs.changes.outputs.app == 'true'
         run: gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
 
       - name: Build and push image
+        if: needs.changes.outputs.app == 'true'
         run: |
           IMAGE=asia-southeast1-docker.pkg.dev/vintravel-chatbot/vin-pipeline/api
           docker build -f docker/Dockerfile.api -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
@@ -164,12 +199,22 @@ jobs:
             --from-literal=S3_BUCKET=${{ secrets.S3_BUCKET }} \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Deploy to GKE
+      - name: Apply k8s manifests
         run: |
           kubectl apply -f k8s/configmap.yaml
           kubectl apply -f k8s/postgres-statefulset.yaml
           kubectl apply -f k8s/qdrant-statefulset.yaml
           kubectl apply -f k8s/api-deployment.yaml
+
+      - name: Rollout new image
+        if: needs.changes.outputs.app == 'true'
+        run: |
           kubectl set image deployment/vin-pipeline-api \
             api=asia-southeast1-docker.pkg.dev/vintravel-chatbot/vin-pipeline/api:${{ github.sha }}
+          kubectl rollout status deployment/vin-pipeline-api --timeout=600s
+
+      - name: Rollout restart (config-only change)
+        if: needs.changes.outputs.app == 'false' && needs.changes.outputs.k8s == 'true'
+        run: |
+          kubectl rollout restart deployment/vin-pipeline-api
           kubectl rollout status deployment/vin-pipeline-api --timeout=600s
