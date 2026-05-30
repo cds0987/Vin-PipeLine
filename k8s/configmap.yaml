@@ -4,25 +4,35 @@ metadata:
   name: vin-pipeline-config
   namespace: default
 data:
-  AI_PROVIDER: "mock"
+  # AI — switch to "auto" + set AI_API_KEY secret to enable real embeddings
+  AI_PROVIDER: "auto"
+  EMBED_MODEL: "text-embedding-3-small"
+  VISION_MODEL: "gpt-4o"
+  # Vector store
   VECTOR_STORE: "qdrant"
   QDRANT_HOST: "qdrant"
   QDRANT_PORT: "6333"
+  # QDRANT_COLLECTION is a base name; actual collection = {base}_{EMBEDDING_DIM}
+  # e.g. documents_32 (mock) or documents_1536 (openai). Changing EMBEDDING_DIM
+  # automatically uses a new collection — no manual rename needed.
   QDRANT_COLLECTION: "documents"
-  EMBEDDING_DIM: "32"
+  EMBEDDING_DIM: "1536"
+  # Metadata
   METADATA_STORE: "postgres"
+  # Storage
   USE_S3: "false"
   MARKDOWN_BUCKET: "rag-pipeline-local"
   MARKDOWN_S3_PREFIX: "rag-derived/markdown"
+  # Pipeline
   SECTION_FALLBACK_MAX_CHARS: "2400"
   SECTION_FALLBACK_PARAGRAPHS: "3"
   CAPTION_MAX_CHARS: "280"
   CAPTION_MODEL: "heuristic"
   PARSER_VERSION: "pipeline.parsers.v1"
+  # Scanner
   SCAN_PREFIX: ""
   SCAN_INTERVAL_SECONDS: "300"
   SCAN_MAX_WORKERS: "4"
-  CHUNK_SIZE: "512"
-  CHUNK_OVERLAP: "64"
+  # Search
   SEARCH_SCORE_THRESHOLD: "0.5"
   SEARCH_QUERY_MAX_LENGTH: "2000"

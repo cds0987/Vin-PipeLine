@@ -18,6 +18,17 @@ spec:
       labels:
         app: vin-pipeline-api
     spec:
+      # Run DB migration before the API container starts.
+      # If migration fails, the pod will not start → deploy fails safely.
+      initContainers:
+        - name: db-migrate
+          image: asia-southeast1-docker.pkg.dev/vintravel-chatbot/vin-pipeline/api:latest
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: vin-pipeline-config
+            - secretRef:
+                name: vin-pipeline-secret
       containers:
         - name: api
           image: asia-southeast1-docker.pkg.dev/vintravel-chatbot/vin-pipeline/api:latest

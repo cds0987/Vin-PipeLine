@@ -18,21 +18,16 @@ class QdrantStore:
         else:
             self._client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
 
-        self._collection = settings.QDRANT_COLLECTION
+        # Collection name encodes EMBEDDING_DIM to prevent silent mismatch.
+        # Changing EMBEDDING_DIM automatically routes to a different collection
+        # instead of crashing against an existing incompatible schema.
+        self._collection = f"{settings.QDRANT_COLLECTION}_{settings.EMBEDDING_DIM}"
         existing = {c.name for c in self._client.get_collections().collections}
         if self._collection not in existing:
             self._client.create_collection(
                 collection_name=self._collection,
                 vectors_config=VectorParams(size=settings.EMBEDDING_DIM, distance=Distance.COSINE),
             )
-        else:
-            info = self._client.get_collection(self._collection)
-            actual_size = getattr(getattr(info.config.params, "vectors", None), "size", None)
-            if actual_size is not None and actual_size != settings.EMBEDDING_DIM:
-                raise ValueError(
-                    f"Qdrant collection '{self._collection}' dimension mismatch: "
-                    f"expected {settings.EMBEDDING_DIM}, got {actual_size}"
-                )
         self._client.create_payload_index(
             collection_name=self._collection,
             field_name="doc_id",

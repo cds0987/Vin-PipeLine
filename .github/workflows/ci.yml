@@ -122,6 +122,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      USE_GKE_GCLOUD_AUTH_PLUGIN: "True"
     steps:
       - uses: actions/checkout@v4
 
@@ -132,6 +134,8 @@ jobs:
           service_account: github-actions@vintravel-chatbot.iam.gserviceaccount.com
 
       - uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: 'gke-gcloud-auth-plugin'
 
       - name: Get GKE credentials
         run: |
