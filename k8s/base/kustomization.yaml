@@ -4,7 +4,7 @@ kind: Kustomization
 # All manifests listed here. CI has no knowledge of this list.
 # To add a new resource: add the file here, CI deploy picks it up automatically.
 resources:
-  - ../configmap.yaml
-  - ../postgres-statefulset.yaml
-  - ../qdrant-statefulset.yaml
-  - ../api-deployment.yaml
+  - configmap.yaml
+  - postgres-statefulset.yaml
+  - qdrant-statefulset.yaml
+  - api-deployment.yaml
