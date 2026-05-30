@@ -44,6 +44,7 @@ Nếu thấy code cũ còn tham chiếu những thứ trên → đó là legacy 
 | Tại sao system thiết kế thế này + diagram + design principles + extension guide | `ARCHITECTURE.md` |
 | Chi tiết từng bước pipeline, schema DB, API request/response, env vars | `PIPELINE.md` |
 | Cách chạy local, docker compose, test commands | `SETUP.md` |
+| Vận hành GKE, xem log, debug production | `GKE.md` |
 | Production risks, bottlenecks, hardening backlog | `RISKS.md` |
 | Test structure + coverage backlog còn thiếu | `TESTS.md` |
 | Thứ gì đã bị bỏ, code nào là legacy, không được dùng làm reference | `LEGACY.md` |

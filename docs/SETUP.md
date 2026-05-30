@@ -177,6 +177,8 @@ docs/         Tài liệu hệ thống
 
 ## Deployment — GKE (production)
 
+Chi tiết đầy đủ → `docs/GKE.md`. Phần dưới là tóm tắt nhanh.
+
 Cluster: `vin-pipeline`, zone `asia-southeast1-a`, project `vintravel-chatbot`.  
 API external IP: `136.110.29.1` (LoadBalancer).
 
