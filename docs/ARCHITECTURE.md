@@ -85,7 +85,7 @@ Implementation cụ thể cho từng port:
 |---|---|
 | `parser/` | `RouterDocumentParser` → gọi `pipeline/parsers/` |
 | `sectioning/` | `HeadingSectionSplitter` |
-| `ai/` | `AISectionCaptioner`, `AISectionEmbedder` |
+| `ai/` | `AISectionCaptioner` (caption song song qua `Semaphore`), `AISectionEmbedder` (đẩy qua `BatchEmbedder`) |
 | `storage/` | `StorageBinaryReader`, `ArtifactMarkdownStore` |
 | `vector/` | `VectorStoreSectionIndex` (adapter), `QdrantStore`, `InMemoryVectorStore` |
 | `repositories/` | `MetadataStoreRepository` (adapter), `SQLMetadataStore`, `FileMetadataStore`, `InMemoryMetadataStore` |
@@ -97,9 +97,12 @@ Implementation cụ thể cho từng port:
 
 - Đọc environment để chọn implementation (Qdrant vs memory, Postgres vs file...)
 - Build tất cả infrastructure objects
+- Tạo `BatchEmbedder` **một lần** (singleton) dùng chung cho mọi ingest job — bắt buộc để coalesce embedding cross-job
 - Wire dependency vào use cases
-- Trả `Container` chỉ expose use cases + `degraded_reasons` + `system_info`
-- `api/main.py` không được biết implementation cụ thể nào đang dùng
+- Trả `Container` chỉ expose use cases + `batch_embedder` + `degraded_reasons` + `system_info`
+- `api/main.py` không được biết implementation cụ thể nào đang dùng; lifespan gọi `batch_embedder.flush_and_close()` khi shutdown
+
+> Runtime ingest/search chạy trên một asyncio event loop. Use case là coroutine; I/O hiện bọc qua `asyncio.to_thread` (chưa async thật ở layer S3/DB/Qdrant). Xem [STATUS.md](./STATUS.md) #3 và [notes/ASYNC_REFACTOR.md](./notes/ASYNC_REFACTOR.md).
 
 ## Parser layer
 

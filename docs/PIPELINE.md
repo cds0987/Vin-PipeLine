@@ -182,3 +182,9 @@ api/ → app/application/ → app/ports/ ← app/infrastructure/
 | `USE_S3` | `false` | Bật S3 thật (tắt = local filesystem) |
 | `SCAN_INTERVAL_SECONDS` | `300` | Interval scanner; 0 = disable |
 | `SEARCH_SCORE_THRESHOLD` | `0.5` | Minimum cosine similarity; 0.0 = disable |
+| `CAPTION_MAX_CONCURRENCY` | `5` | Số caption call đồng thời tối đa toàn system (`asyncio.Semaphore`) |
+| `EMBED_BATCH_WINDOW_MS` | `5` | BatchEmbedder: chờ tối đa bao lâu trước khi flush (production nên đặt `50`–`100`) |
+| `EMBED_MAX_BATCH_SIZE` | `32` | BatchEmbedder: flush ngay khi queue đạt size này |
+| `EMBED_CACHE_SIZE` | `4096` | BatchEmbedder: số vector cache tối đa (LRU theo content hash) |
+
+> Pipeline ingest chạy async: `RunIngestJob.execute` là coroutine, caption song song qua `Semaphore`, embedding gom cross-job qua **BatchEmbedder** (singleton trong container). Chi tiết: [notes/BATCH_EMBEDDER.md](./notes/BATCH_EMBEDDER.md). Trạng thái async refactor: [STATUS.md](./STATUS.md).

@@ -37,20 +37,36 @@ Nếu thấy code cũ còn tham chiếu những thứ trên → đó là legacy 
 5. **`/health` phải phản ánh fallback** — nếu thêm dependency mới, phải hook vào health check.
 6. **Không thêm luồng vào/ra mới** mà không cập nhật `ARCHITECTURE.md` và `PIPELINE.md` trước.
 
+## Hai loại doc — đừng trộn lẫn
+
+| Loại | Ý nghĩa | Ở đâu | Quy tắc |
+|---|---|---|---|
+| **Reference (sống)** | Mô tả hệ thống *đang là gì*. Phải luôn đúng. | `docs/*.md` | Current-or-delete. Code đổi → cập nhật ngay. |
+| **Status (sống)** | Dự án *đang ở đâu* lúc này. | `docs/STATUS.md` | File duy nhất cho WIP/backlog. Cập nhật mỗi phiên. |
+| **Note (đóng băng)** | Plan/đánh giá *tại một thời điểm*. | `docs/notes/*.md` | Không sửa sau khi viết. Stale là bình thường. |
+
+**Trước khi tạo doc mới, hỏi:** đây là reference, status, hay note? Việc đang dở → cập nhật `STATUS.md`, **không** tạo file mới. Plan/đánh giá một lần → `notes/` kèm ngày.
+
 ## Tìm thứ gì ở đâu
+
+**Reference (luôn đúng):**
 
 | Tôi cần biết... | File |
 |---|---|
-| Developer mới — setup từ đầu, cấu trúc, workflow hàng ngày | `ONBOARDING.md` |
 | Tại sao system thiết kế thế này + diagram + design principles + extension guide | `ARCHITECTURE.md` |
 | Chi tiết từng bước pipeline, schema DB, API request/response, env vars | `PIPELINE.md` |
-| Cách chạy local, docker compose, test commands | `SETUP.md` |
-| CI/CD — 5 jobs, trigger logic, secrets, debug failed deploy | `CICD.md` |
-| Vận hành GKE, xem log, debug production | `GKE.md` |
+| Developer mới — chạy local, docker compose, test commands | `SETUP.md` |
+| Deploy, CI/CD (5 jobs), vận hành GKE, debug production, observability | `OPERATIONS.md` |
 | Production risks, bottlenecks, hardening backlog | `RISKS.md` |
 | Test structure + coverage backlog còn thiếu | `TESTS.md` |
 | Thứ gì đã bị bỏ, code nào là legacy, không được dùng làm reference | `LEGACY.md` |
-| Schema log task, sprint review cadence, cách track agent quality | `LOGGING.md` |
+
+**Status & history:**
+
+| Tôi cần biết... | File |
+|---|---|
+| Dự án đang ở đâu — WIP chưa commit, backlog ưu tiên, deployment state | `STATUS.md` |
+| Các plan/đánh giá đã đóng băng (async refactor, MOSA, caption arch...) | `notes/` (xem `notes/README.md`) |
 
 ## Nguyên tắc làm việc
 

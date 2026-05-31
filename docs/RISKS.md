@@ -65,15 +65,15 @@ Hiện thiếu:
 
 ## GKE deployment risks (hiện tại)
 
-**MockAIProvider trong production** — `AI_PROVIDER=mock`, `EMBEDDING_DIM=32`. Embedding không có semantic. Khi đổi sang OpenAI phải xóa Qdrant collection trước — nếu không, dimension mismatch gây 500.
-
 **S3 chưa có** — `USE_S3=false`, scanner không chạy. Không có document nào được index. Chờ credentials từ team khác.
 
 **Qdrant single replica** — chạy 1 replica thay vì 3 (thiếu node resources trên e2-standard-2). Không có replication, mất data nếu pod crash. Cần scale nodes lên e2-standard-4 và tăng replicas khi sẵn sàng production.
 
 **Secret không được quản lý trong git** — `vin-pipeline-secret` được tạo thủ công trên cluster. Nếu cluster bị xóa hoặc secret bị xóa, phải tạo lại thủ công.
 
-**EMBEDDING_DIM phải khớp với collection** — nếu thay đổi dimension mà không xóa collection, Qdrant trả 500. Đây là nguyên nhân của sự cố đã gặp (1536 → 32).
+**EMBEDDING_DIM và collection** — từ 2026-05-30 collection Qdrant encode dimension (`documents_1536`), nên đổi dim → collection mới tự tạo, tránh được sự cố mismatch (1536 → 32) đã gặp trước đây. Vẫn cần dọn collection cũ thủ công nếu muốn giải phóng dung lượng.
+
+> Lưu ý: production hiện chạy OpenRouter thật (`EMBEDDING_DIM=1536`), không còn mock mode. Trạng thái deployment hiện tại → [STATUS.md](./STATUS.md) và [OPERATIONS.md](./OPERATIONS.md).
 
 ## Hardening backlog
 

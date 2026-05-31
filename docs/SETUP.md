@@ -175,76 +175,9 @@ tests/        Test suite theo domain
 docs/         Tài liệu hệ thống
 ```
 
-## Deployment — GKE (production)
+## Deployment & production
 
-Chi tiết đầy đủ → `docs/GKE.md`. Phần dưới là tóm tắt nhanh.
-
-Cluster: `vin-pipeline`, zone `asia-southeast1-a`, project `vintravel-chatbot`.  
-API external IP: `136.110.29.1` (LoadBalancer).
-
-### Kiểm tra trạng thái
-
-```bash
-kubectl get pods
-kubectl get services
-```
-
-### Test nhanh trên production
-
-```powershell
-# Health check
-Invoke-RestMethod http://136.110.29.1/health
-
-# Search
-Invoke-RestMethod -Uri "http://136.110.29.1/search" -Method POST `
-  -ContentType "application/json" -Body '{"query": "test", "top_k": 5}'
-```
-
-### Xem log API
-
-```bash
-kubectl logs deployment/vin-pipeline-api --tail=100 -f
-```
-
-### Port-forward để debug nội bộ
-
-```bash
-# Qdrant REST
-kubectl port-forward qdrant-0 6333:6333 &
-
-# Postgres
-kubectl port-forward postgres-0 5432:5432 &
-```
-
-### Khi có S3 credentials từ team khác
-
-```powershell
-gh secret set AWS_ACCESS_KEY_ID --body "<key>"
-gh secret set AWS_SECRET_ACCESS_KEY --body "<secret>"
-gh secret set S3_ENDPOINT --body "<url>"
-gh secret set S3_BUCKET --body "<bucket>"
-```
-
-Sau đó đổi `USE_S3: "true"` trong `k8s/base/configmap.yaml` và push lên main — CI sẽ tự deploy.
-
-### Khi đổi AI provider
-
-Hiện tại GKE dùng OpenRouter. Để đổi provider hoặc key:
-
-1. `gh secret set AI_API_KEY --body "sk-<new-key>"`
-2. Sửa `k8s/base/configmap.yaml`: `AI_BASE_URL`, `EMBED_MODEL`, `VISION_MODEL` theo format provider mới
-3. Nếu đổi `EMBEDDING_DIM`: collection Qdrant mới tự tạo (tên encode dimension — không cần xóa thủ công)
-4. Push lên main → CI tự deploy
-
-### CI/CD — 5 jobs
-
-| Job | Trigger | Việc làm |
-|---|---|---|
-| `pytest` | mọi push | Unit tests với mock/in-memory, không cần infra |
-| `docker-test` | mọi push | Full stack trong Docker Compose (Qdrant + MinIO) |
-| `qdrant-integration` | push (không phải fork PR) | Tests với Qdrant Cloud thật (`-m qdrant`) |
-| `minio-integration` | push (không phải fork PR) | Tests với MinIO Docker (`-m minio`) |
-| `deploy` | push lên `main` sau khi `pytest` + `docker-test` pass | Build image → Artifact Registry → kubectl apply → rollout |
+Toàn bộ deploy, CI/CD, vận hành GKE, debug production → [OPERATIONS.md](./OPERATIONS.md).
 
 ## Những hiểu nhầm phổ biến
 

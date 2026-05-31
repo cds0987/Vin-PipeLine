@@ -23,6 +23,7 @@ python -m pytest -q
 | Cần biết | File |
 |---|---|
 | Rules, off-limits, DoD đầy đủ | `docs/AGENTS.md` |
+| **Dự án đang ở đâu** — WIP, backlog, deployment state | `docs/STATUS.md` |
 | Kiến trúc + diagram + design principles | `docs/ARCHITECTURE.md` |
 | Chi tiết pipeline, schema DB, API, env vars | `docs/PIPELINE.md` |
 | Cách chạy local, docker, test commands | `docs/SETUP.md` |
