@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     scan_max_workers: int = 4          # max concurrent pipeline workers per scan cycle
     scan_job_timeout_seconds: int = 900  # max wall-clock seconds per ingest job; 0 = disable
     stale_indexing_seconds: int = 3600
+    caption_max_concurrency: int = 5   # max concurrent caption API calls across all jobs
+
+    embed_batch_window_ms: int = 5     # flush pending embed requests after this many ms (override to 80+ in production)
+    embed_max_batch_size: int = 32     # flush when queue reaches this size
+    embed_cache_size: int = 4096       # max cached embedding vectors (LRU, by content hash)
 
     search_score_threshold: float = 0.5  # minimum cosine similarity; 0.0 = disabled
     search_query_max_length: int = 2000
@@ -145,6 +150,10 @@ SCAN_PREFIX = _settings.scan_prefix
 SCAN_MAX_WORKERS = _settings.scan_max_workers
 SCAN_JOB_TIMEOUT_SECONDS = _settings.scan_job_timeout_seconds
 STALE_INDEXING_SECONDS = _settings.stale_indexing_seconds
+CAPTION_MAX_CONCURRENCY = _settings.caption_max_concurrency
+EMBED_BATCH_WINDOW_MS = _settings.embed_batch_window_ms
+EMBED_MAX_BATCH_SIZE = _settings.embed_max_batch_size
+EMBED_CACHE_SIZE = _settings.embed_cache_size
 SEARCH_SCORE_THRESHOLD = _settings.search_score_threshold
 SEARCH_QUERY_MAX_LENGTH = _settings.search_query_max_length
 SEARCH_QUERY_CACHE_SIZE = _settings.search_query_cache_size
@@ -182,6 +191,14 @@ def validate_runtime_settings() -> None:
         raise ValueError("SECTION_FALLBACK_PARAGRAPHS must be greater than 0.")
     if CAPTION_MAX_CHARS <= 0:
         raise ValueError("CAPTION_MAX_CHARS must be greater than 0.")
+    if CAPTION_MAX_CONCURRENCY <= 0:
+        raise ValueError("CAPTION_MAX_CONCURRENCY must be greater than 0.")
+    if EMBED_BATCH_WINDOW_MS <= 0:
+        raise ValueError("EMBED_BATCH_WINDOW_MS must be greater than 0.")
+    if EMBED_MAX_BATCH_SIZE <= 0:
+        raise ValueError("EMBED_MAX_BATCH_SIZE must be greater than 0.")
+    if EMBED_CACHE_SIZE <= 0:
+        raise ValueError("EMBED_CACHE_SIZE must be greater than 0.")
     if EMBED_RETRY_BACKOFF_SECONDS < 0 or OCR_RETRY_BACKOFF_SECONDS < 0:
         raise ValueError("Retry backoff values must be greater than or equal to 0.")
     if not LOCAL_FILE_ROOT.exists():

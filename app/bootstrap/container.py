@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.application.ingest.index_sections import DocumentIndexService
 from app.application.ingest.run_ingest_job import RunIngestJob
@@ -18,6 +18,7 @@ from app.infrastructure.storage.markdown_store import ArtifactMarkdownStore
 from app.infrastructure.vector.section_index import VectorStoreSectionIndex
 from config import settings
 from utils.ai_provider import AIProvider, MockAIProvider, build_ai_provider
+from utils.batch_embedder import BatchEmbedder
 from utils.stores import MetadataStore, VectorStore, build_metadata_store, build_vector_store
 
 
@@ -29,6 +30,7 @@ class Container:
     search_sections: SearchSections
     scan_documents: ScanDocuments
     get_document_status: GetDocumentStatus
+    batch_embedder: BatchEmbedder
 
 
 def build_container(
@@ -40,11 +42,18 @@ def build_container(
     resolved_vector, vector_warning = (vector_store, None) if vector_store else build_vector_store()
     resolved_metadata, metadata_warning = (metadata_store, None) if metadata_store else build_metadata_store()
 
+    batch_embedder = BatchEmbedder(
+        provider=resolved_ai,
+        max_batch_size=settings.EMBED_MAX_BATCH_SIZE,
+        window_ms=settings.EMBED_BATCH_WINDOW_MS,
+        cache_size=settings.EMBED_CACHE_SIZE,
+    )
+
     parser = RouterDocumentParser(resolved_ai)
     markdown_store = ArtifactMarkdownStore()
     splitter = HeadingSectionSplitter()
     captioner = AISectionCaptioner(resolved_ai)
-    embedder = AISectionEmbedder(resolved_ai)
+    embedder = AISectionEmbedder(batch_embedder)
     section_index = VectorStoreSectionIndex(resolved_vector)
     repository = MetadataStoreRepository(resolved_metadata)
     index_service = DocumentIndexService(section_index, repository, repository)
@@ -65,7 +74,6 @@ def build_container(
     status = GetDocumentStatus(repository)
 
     degraded_reasons = [r for r in (ai_warning, vector_warning, metadata_warning) if r]
-    # Only warn about mock fallback when AI was auto-selected (not explicitly provided by caller).
     if ai_provider is None and isinstance(resolved_ai, MockAIProvider) and not settings.AI_API_KEY:
         degraded_reasons.append("AI provider is running in mock fallback mode.")
 
@@ -82,4 +90,5 @@ def build_container(
         search_sections=search,
         scan_documents=scan,
         get_document_status=status,
+        batch_embedder=batch_embedder,
     )

@@ -7,7 +7,7 @@ from app.domain.sections.models import SectionRecord
 
 
 class SectionCaptioner(Protocol):
-    """Generate captions for a batch of sections in-place."""
+    """Generate captions for a batch of sections concurrently."""
 
     @abstractmethod
-    def caption_sections(self, sections: list[SectionRecord]) -> list[SectionRecord]: ...
+    async def caption_sections(self, sections: list[SectionRecord]) -> list[SectionRecord]: ...

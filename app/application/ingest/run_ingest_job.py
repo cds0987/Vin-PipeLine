@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -40,14 +41,15 @@ class RunIngestJob:
         self._ingest_claim_repository = ingest_claim_repository
         self._job_log_repository = job_log_repository
 
-    def execute(self, job: IngestJob, deadline_monotonic: float | None = None) -> dict:
+    async def execute(self, job: IngestJob, deadline_monotonic: float | None = None) -> dict:
         def _check_deadline(stage: str) -> None:
             if deadline_monotonic is not None and time.perf_counter() > deadline_monotonic:
                 raise TimeoutError(f"doc_id={job.doc_id}: ingest timeout exceeded at stage={stage}")
 
         started_at = time.perf_counter()
         try:
-            if not self._ingest_claim_repository.try_claim_ingest(job):
+            claimed = await asyncio.to_thread(self._ingest_claim_repository.try_claim_ingest, job)
+            if not claimed:
                 return {"doc_id": job.doc_id, "status": "skipped", "section_count": 0}
 
             log.info(
@@ -58,12 +60,14 @@ class RunIngestJob:
             )
 
             _check_deadline("read")
-            file_bytes = self._binary_reader.read(job.file_uri)
+            file_bytes = await asyncio.to_thread(self._binary_reader.read, job.file_uri)
 
             _check_deadline("parse")
             t0 = time.perf_counter()
-            markdown_doc = self._parser.parse(job, file_bytes)
-            markdown_doc = markdown_doc.model_copy(update={"markdown_content": self._normalize(markdown_doc.markdown_content)})
+            markdown_doc = await asyncio.to_thread(self._parser.parse, job, file_bytes)
+            markdown_doc = markdown_doc.model_copy(
+                update={"markdown_content": self._normalize(markdown_doc.markdown_content)}
+            )
             job = job.model_copy(update={"language": self._detect_language(markdown_doc.markdown_content)})
             if not markdown_doc.markdown_content.strip():
                 raise ValueError(f"doc_id={job.doc_id}: parse produced empty markdown")
@@ -76,7 +80,7 @@ class RunIngestJob:
 
             _check_deadline("markdown_store")
             t0 = time.perf_counter()
-            markdown_doc = self._markdown_store.save(markdown_doc)
+            markdown_doc = await asyncio.to_thread(self._markdown_store.save, markdown_doc)
             log.info(
                 "markdown_saved doc_id=%s markdown_s3_uri=%s duration_ms=%d",
                 job.doc_id, markdown_doc.markdown_s3_uri,
@@ -85,7 +89,7 @@ class RunIngestJob:
 
             _check_deadline("split")
             t0 = time.perf_counter()
-            sections = self._section_splitter.split(markdown_doc, job)
+            sections = await asyncio.to_thread(self._section_splitter.split, markdown_doc, job)
             if not sections:
                 raise ValueError(f"doc_id={job.doc_id}: markdown produced no sections")
             log.info(
@@ -96,7 +100,7 @@ class RunIngestJob:
 
             _check_deadline("caption")
             t0 = time.perf_counter()
-            sections = self._section_captioner.caption_sections(sections)
+            sections = await self._section_captioner.caption_sections(sections)
             caption_model = sections[0].metadata.get("caption_model", "") if sections else ""
             log.info(
                 "captions_generated doc_id=%s section_count=%d caption_model=%s duration_ms=%d",
@@ -106,7 +110,7 @@ class RunIngestJob:
 
             _check_deadline("embed")
             t0 = time.perf_counter()
-            sections = self._section_embedder.embed_sections(sections)
+            sections = await self._section_embedder.embed_sections(sections)
             embedding_model = sections[0].metadata.get("embedding_model", "") if sections else ""
             embedding_dim = len(sections[0].embedding) if sections else 0
             log.info(
@@ -117,7 +121,9 @@ class RunIngestJob:
 
             _check_deadline("index")
             duration = round(time.perf_counter() - started_at, 3)
-            result = self._index_service.index_sections(sections, job, duration_seconds=duration)
+            result = await asyncio.to_thread(
+                self._index_service.index_sections, sections, job, duration_seconds=duration
+            )
             log.info(
                 "ingest_completed doc_id=%s section_count=%d source_s3_uri=%s markdown_s3_uri=%s duration_ms=%d",
                 job.doc_id, result.get("section_count", 0),
@@ -128,13 +134,13 @@ class RunIngestJob:
 
         except Exception as exc:
             duration = round(time.perf_counter() - started_at, 3)
-            self._job_log_repository.record_job(
-                doc_id=job.doc_id,
-                status="failed",
-                duration_seconds=duration,
-                error_message=str(exc),
+            await asyncio.to_thread(
+                self._job_log_repository.record_job,
+                job.doc_id, "failed", duration_seconds=duration, error_message=str(exc),
             )
-            self._document_repository.update_status(job.doc_id, DocumentStatus.FAILED)
+            await asyncio.to_thread(
+                self._document_repository.update_status, job.doc_id, DocumentStatus.FAILED
+            )
             log.exception(
                 "ingest_failed doc_id=%s error_type=%s error=%s duration_ms=%d",
                 job.doc_id, type(exc).__name__, exc,

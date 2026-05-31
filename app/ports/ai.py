@@ -15,7 +15,7 @@ class SectionEmbedder(Protocol):
     """Embed captions for a batch of sections, attaching vectors in-place."""
 
     @abstractmethod
-    def embed_sections(self, sections: list["SectionRecord"]) -> list["SectionRecord"]: ...
+    async def embed_sections(self, sections: list["SectionRecord"]) -> list["SectionRecord"]: ...
 
 
 class CaptionProvider(Protocol):

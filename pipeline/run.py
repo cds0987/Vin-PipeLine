@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.bootstrap.container import build_container
 from models.ingest_job import IngestJob
 from utils.ai_provider import AIProvider
@@ -18,4 +20,4 @@ def run(
         vector_store=vector_store,
         metadata_store=metadata_store,
     )
-    return container.run_ingest_job.execute(job, deadline_monotonic=deadline_monotonic)
+    return asyncio.run(container.run_ingest_job.execute(job, deadline_monotonic=deadline_monotonic))

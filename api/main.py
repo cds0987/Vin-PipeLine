@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -17,7 +17,9 @@ from models.ingest_job import IngestJob
 
 log = logging.getLogger(__name__)
 
+# threading.Lock so test_scan_coordination can call .acquire(blocking=False) directly
 _scan_lock = threading.Lock()
+_DEFAULT_JOB_QUEUE_SIZE_MULTIPLIER = 4
 
 
 class SearchRequest(BaseModel):
@@ -38,78 +40,163 @@ class ScanRequest(BaseModel):
     prefix: str | None = None
 
 
-def _run_single_job(job: IngestJob, container: Container) -> dict:
-    deadline_monotonic = None
-    if settings.SCAN_JOB_TIMEOUT_SECONDS > 0:
-        deadline_monotonic = time.perf_counter() + settings.SCAN_JOB_TIMEOUT_SECONDS
-    return container.run_ingest_job.execute(job, deadline_monotonic=deadline_monotonic)
+class _JobDispatcher:
+    """Async job dispatcher — one consumer task, semaphore-bounded workers."""
 
+    def __init__(self, max_workers: int, queue_capacity: int) -> None:
+        self._max_workers = max_workers
+        self._queue: asyncio.Queue[tuple[IngestJob, Container]] = asyncio.Queue(maxsize=queue_capacity)
+        self._semaphore = asyncio.Semaphore(max_workers)
+        self._stop_event = asyncio.Event()
+        self._queued_doc_ids: set[str] = set()
+        self._running_doc_ids: set[str] = set()
+        self._consumer_task: asyncio.Task | None = None
 
-def _run_jobs(jobs: list[IngestJob], container: Container) -> int:
-    ran = 0
-    if not jobs:
-        return ran
-    with ThreadPoolExecutor(max_workers=settings.SCAN_MAX_WORKERS) as pool:
-        futures = {pool.submit(_run_single_job, job, container): job for job in jobs}
-        for future in as_completed(futures):
-            job = futures[future]
+    async def start(self) -> None:
+        self._consumer_task = asyncio.create_task(self._consumer_loop(), name="job-dispatcher-consumer")
+
+    async def stop(self) -> None:
+        self._stop_event.set()
+        if self._consumer_task:
+            self._consumer_task.cancel()
             try:
-                result = future.result()
-                if result.get("status") != "skipped":
-                    ran += 1
+                await self._consumer_task
+            except asyncio.CancelledError:
+                pass
+
+    def enqueue_jobs(self, jobs: list[IngestJob], container: Container) -> int:
+        """Sync entry point — safe to call from async endpoints without await."""
+        enqueued = 0
+        for job in jobs:
+            if job.doc_id in self._queued_doc_ids or job.doc_id in self._running_doc_ids:
+                continue
+            try:
+                self._queue.put_nowait((job, container))
+                self._queued_doc_ids.add(job.doc_id)
+                enqueued += 1
+            except asyncio.QueueFull:
+                log.warning("Dispatcher queue full - dropping doc_id=%s", job.doc_id)
+        return enqueued
+
+    def snapshot(self) -> dict[str, int]:
+        return {
+            "queue_depth": self._queue.qsize(),
+            "queued_jobs": len(self._queued_doc_ids),
+            "running_jobs": len(self._running_doc_ids),
+        }
+
+    async def _consumer_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                job, container = await asyncio.wait_for(self._queue.get(), timeout=0.2)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            asyncio.create_task(
+                self._run_job(job, container),
+                name=f"ingest-{job.doc_id}",
+            )
+            self._queue.task_done()
+
+    async def _run_job(self, job: IngestJob, container: Container) -> None:
+        self._queued_doc_ids.discard(job.doc_id)
+        self._running_doc_ids.add(job.doc_id)
+        async with self._semaphore:
+            try:
+                deadline = None
+                if settings.SCAN_JOB_TIMEOUT_SECONDS > 0:
+                    deadline = time.perf_counter() + settings.SCAN_JOB_TIMEOUT_SECONDS
+                await container.run_ingest_job.execute(job, deadline_monotonic=deadline)
             except Exception as exc:
                 log.error("Pipeline failed doc_id=%s: %s", job.doc_id, exc)
-    return ran
+            finally:
+                self._running_doc_ids.discard(job.doc_id)
 
 
-def _scan_and_run_once(container: Container) -> int:
+def _queue_capacity() -> int:
+    return max(16, settings.SCAN_MAX_WORKERS * _DEFAULT_JOB_QUEUE_SIZE_MULTIPLIER)
+
+
+async def _scan_and_enqueue_once(container: Container, dispatcher: _JobDispatcher) -> int:
     if not _scan_lock.acquire(blocking=False):
         log.warning("Scan already in progress - skipping scanner cycle")
         return 0
     try:
-        jobs = container.scan_documents.execute()
+        jobs = await asyncio.to_thread(container.scan_documents.execute)
     finally:
         _scan_lock.release()
-    return _run_jobs(jobs, container)
+    return dispatcher.enqueue_jobs(jobs, container)
 
 
-def _scanner_loop(container: Container) -> None:
-    interval = settings.SCAN_INTERVAL_SECONDS
+async def _scanner_loop(
+    container: Container, dispatcher: _JobDispatcher, stop_event: asyncio.Event
+) -> None:
     log.info(
         "S3 scanner started - interval=%ds bucket=%s prefix=%r",
-        interval,
+        settings.SCAN_INTERVAL_SECONDS,
         settings.S3_BUCKET,
         settings.SCAN_PREFIX,
     )
     while True:
         try:
-            _scan_and_run_once(container)
+            await _scan_and_enqueue_once(container, dispatcher)
         except Exception as exc:
             log.error("Scanner loop error: %s", exc)
-        time.sleep(interval)
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(), timeout=settings.SCAN_INTERVAL_SECONDS
+            )
+            break  # stop_event was set within the interval
+        except asyncio.TimeoutError:
+            pass  # interval elapsed normally — continue scanning
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     container = build_container()
+    dispatcher = _JobDispatcher(
+        max_workers=settings.SCAN_MAX_WORKERS,
+        queue_capacity=_queue_capacity(),
+    )
+    await dispatcher.start()
     app.state.container = container
+    app.state.dispatcher = dispatcher
 
+    scanner_stop = asyncio.Event()
+    scanner_task = None
     if settings.USE_S3 and settings.SCAN_INTERVAL_SECONDS > 0:
-        thread = threading.Thread(target=_scanner_loop, args=(container,), daemon=True)
-        thread.start()
-        log.info("Background S3 scanner thread started")
+        scanner_task = asyncio.create_task(
+            _scanner_loop(container, dispatcher, scanner_stop),
+            name="s3-scanner",
+        )
+        log.info("Background S3 scanner task started")
 
-    yield
+    try:
+        yield
+    finally:
+        scanner_stop.set()
+        if scanner_task:
+            scanner_task.cancel()
+            try:
+                await scanner_task
+            except asyncio.CancelledError:
+                pass
+        await container.batch_embedder.flush_and_close()
+        await dispatcher.stop()
 
 
 app = FastAPI(title="DE Vector Search Engine", lifespan=lifespan)
 
 
 @app.post("/search")
-def search(request: SearchRequest):
+async def search(request: SearchRequest):
     request_id = str(uuid4())
-    results = app.state.container.search_sections.search(
-        request.query, top_k=request.top_k, request_id=request_id
+    results = await asyncio.to_thread(
+        app.state.container.search_sections.search,
+        request.query,
+        top_k=request.top_k,
+        request_id=request_id,
     )
     return {
         "request_id": request_id,
@@ -118,24 +205,30 @@ def search(request: SearchRequest):
 
 
 @app.post("/scan")
-def trigger_scan(request: ScanRequest, background_tasks: BackgroundTasks):
+async def trigger_scan(request: ScanRequest):
     if not _scan_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="scan already in progress")
     try:
-        jobs = app.state.container.scan_documents.execute(bucket=request.bucket, prefix=request.prefix)
+        jobs = await asyncio.to_thread(
+            app.state.container.scan_documents.execute,
+            bucket=request.bucket,
+            prefix=request.prefix,
+        )
     finally:
         _scan_lock.release()
 
     if not jobs:
         return {"status": "scan started", "queued": 0}
 
-    background_tasks.add_task(_run_jobs, jobs, app.state.container)
-    return {"status": "scan started", "queued": len(jobs)}
+    queued = app.state.dispatcher.enqueue_jobs(jobs, app.state.container)
+    return {"status": "scan started", "queued": queued}
 
 
 @app.get("/status/{doc_id}")
-def get_status(doc_id: str):
-    result = app.state.container.get_document_status.execute(doc_id)
+async def get_status(doc_id: str):
+    result = await asyncio.to_thread(
+        app.state.container.get_document_status.execute, doc_id
+    )
     if result is None:
         raise HTTPException(status_code=404, detail=f"doc_id={doc_id} not found")
     return {
@@ -155,14 +248,16 @@ def get_status(doc_id: str):
 
 
 @app.get("/health")
-def health():
+async def health():
     container = app.state.container
     degraded_reasons = list(container.degraded_reasons)
     status = "degraded" if degraded_reasons else "ok"
+    dispatcher_stats = app.state.dispatcher.snapshot()
     payload = {
         "status": status,
         **container.system_info,
         "scanner": "enabled" if (settings.USE_S3 and settings.SCAN_INTERVAL_SECONDS > 0) else "disabled",
+        "dispatcher": dispatcher_stats,
         "degraded_reasons": degraded_reasons,
     }
     return JSONResponse(status_code=200 if status == "ok" else 503, content=payload)

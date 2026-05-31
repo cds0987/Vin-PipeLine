@@ -35,6 +35,12 @@ class FakeAIProvider:
         return None
 
 
+@pytest.fixture(autouse=True)
+def _fast_embed_batch(monkeypatch):
+    """Keep BatchEmbedder flush window at 1ms so tests don't wait the production window."""
+    monkeypatch.setattr("config.settings.EMBED_BATCH_WINDOW_MS", 1)
+
+
 @pytest.fixture
 def fake_ai_provider() -> FakeAIProvider:
     return FakeAIProvider()

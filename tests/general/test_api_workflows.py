@@ -61,7 +61,7 @@ def test_status_endpoint_returns_document(api_client, fake_ai_provider, vector_s
     assert body["status"] == "indexed"
 
 
-def test_scan_endpoint_returns_queued_count(api_client, monkeypatch):
+def test_scan_endpoint_returns_queued_count(api_client):
     import api.main as api_main
 
     class _FakeScanDocuments:
@@ -73,14 +73,45 @@ def test_scan_endpoint_returns_queued_count(api_client, monkeypatch):
                 IngestJob(doc_id="doc-2", file_uri="s3://bucket-a/prefix-a/file-2.pdf"),
             ]
 
-    def fake_run_jobs(jobs, *_args):
-        assert len(jobs) == 2
-        return len(jobs)
+    class _FakeDispatcher:
+        def enqueue_jobs(self, jobs, *_args):
+            assert len(jobs) == 2
+            return len(jobs)
 
+        def snapshot(self):
+            return {"queue_depth": 0, "queued_jobs": 0, "running_jobs": 0}
+
+    api_main.app.state.dispatcher = _FakeDispatcher()
     api_main.app.state.container.scan_documents = _FakeScanDocuments()
-    monkeypatch.setattr(api_main, "_run_jobs", fake_run_jobs)
 
     response = api_client.post("/scan", json={"bucket": "bucket-a", "prefix": "prefix-a"})
 
     assert response.status_code == 200
     assert response.json() == {"status": "scan started", "queued": 2}
+
+
+def test_scan_endpoint_deduplicates_already_tracked_jobs(api_client):
+    import api.main as api_main
+
+    class _FakeScanDocuments:
+        def execute(self, bucket=None, prefix=None):
+            return [
+                IngestJob(doc_id="doc-1", file_uri="s3://bucket-a/prefix-a/file-1.pdf"),
+                IngestJob(doc_id="doc-1", file_uri="s3://bucket-a/prefix-a/file-1.pdf"),
+            ]
+
+    class _FakeDispatcher:
+        def enqueue_jobs(self, jobs, *_args):
+            assert len(jobs) == 2
+            return 1
+
+        def snapshot(self):
+            return {"queue_depth": 1, "queued_jobs": 1, "running_jobs": 0}
+
+    api_main.app.state.dispatcher = _FakeDispatcher()
+    api_main.app.state.container.scan_documents = _FakeScanDocuments()
+
+    response = api_client.post("/scan", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "scan started", "queued": 1}

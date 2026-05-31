@@ -75,26 +75,18 @@ def test_caption_model_name_stamped_in_metadata(monkeypatch):
     assert result[0].metadata["caption_model"] == "test-caption-model"
 
 
-# ─── batch processing ─────────────────────────────────────────────────────────
+# ─── batch processing (BatchEmbedder coalesces into one provider call) ────────
 
-def test_5_chunks_with_batch_size_2_makes_3_provider_calls():
-    """Batches: [0,1] [2,3] [4] → 3 calls."""
+def test_multiple_chunks_coalesced_into_single_provider_call():
+    """BatchEmbedder collects all sections and calls provider once per flush."""
     provider = _RecordingProvider()
     embed.run([_chunk(i) for i in range(5)], provider, batch_size=2)
-    assert len(provider.calls) == 3
-    assert len(provider.calls[0]) == 2
-    assert len(provider.calls[1]) == 2
-    assert len(provider.calls[2]) == 1
+    # All 5 sections fit within EMBED_MAX_BATCH_SIZE — flushed in one call
+    assert len(provider.calls) == 1
+    assert len(provider.calls[0]) == 5
 
 
-def test_chunks_exactly_divisible_by_batch_size():
-    """4 chunks, batch_size=2 → exactly 2 calls."""
-    provider = _RecordingProvider()
-    embed.run([_chunk(i) for i in range(4)], provider, batch_size=2)
-    assert len(provider.calls) == 2
-
-
-def test_all_chunks_receive_embeddings_across_batches():
+def test_all_chunks_receive_embeddings():
     provider = _RecordingProvider(dim=settings.EMBEDDING_DIM)
     chunks = [_chunk(i) for i in range(10)]
     result = embed.run(chunks, provider, batch_size=3)
@@ -113,9 +105,11 @@ def test_provider_receives_caption_strings_for_embedding():
 
 
 def test_caption_provider_receives_section_content_strings():
+    """AISectionCaptioner captions each section individually (one text per call)."""
     provider = _RecordingProvider()
     chunks = [_chunk(i) for i in range(3)]
     embed.run(chunks, provider, batch_size=10)
+    # Caption is called once per section (asyncio.gather + _caption_one)
     all_texts = [t for batch in provider.caption_calls for t in batch]
     assert all_texts == [c.section_content for c in chunks]
 
@@ -151,7 +145,6 @@ def test_embedding_response_size_mismatch_raises():
     """Provider returning wrong number of embeddings must raise ValueError."""
     class _ShortProvider:
         def embed(self, texts):
-            # Returns fewer embeddings than requested
             return [[0.1] * settings.EMBEDDING_DIM]  # only 1 instead of 3
         def caption(self, texts): return texts
         def ocr(self, _): return ""

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.application.ingest.index_sections import DocumentIndexService
@@ -49,14 +51,14 @@ class _Splitter:
 
 
 class _Captioner:
-    def caption_sections(self, sections):
+    async def caption_sections(self, sections):
         for section in sections:
             section.caption = section.section_content[:80]
         return sections
 
 
 class _Embedder:
-    def embed_sections(self, sections):
+    async def embed_sections(self, sections):
         for section in sections:
             section.embedding = [0.1] * settings.EMBEDDING_DIM
         return sections
@@ -98,7 +100,7 @@ def test_empty_parse_result_raises_and_marks_failed(tmp_path):
     usecase, _vector_store, metadata_store = _usecase(_Parser(""))
 
     with pytest.raises(ValueError, match="empty markdown"):
-        usecase.execute(job)
+        asyncio.run(usecase.execute(job))
 
     doc = metadata_store.get_document("doc-empty")
     assert doc is not None
@@ -112,7 +114,7 @@ def test_whitespace_only_markdown_is_treated_as_empty(tmp_path):
     usecase, _vector_store, metadata_store = _usecase(_Parser("   \n\n "))
 
     with pytest.raises(ValueError, match="empty markdown"):
-        usecase.execute(job)
+        asyncio.run(usecase.execute(job))
 
     assert metadata_store.get_document("doc-blank").status == "failed"
 
@@ -124,7 +126,7 @@ def test_embed_exception_marks_status_failed(tmp_path):
     metadata_store = InMemoryMetadataStore()
 
     class _FailEmbedder:
-        def embed_sections(self, sections): raise RuntimeError("embed API down")
+        async def embed_sections(self, sections): raise RuntimeError("embed API down")
 
     usecase, _vector_store, metadata_store = _usecase(
         _Parser("content for embed failure test"),
@@ -133,7 +135,7 @@ def test_embed_exception_marks_status_failed(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="embed API down"):
-        usecase.execute(job)
+        asyncio.run(usecase.execute(job))
 
     assert metadata_store.get_document("doc-embed-fail").status == "failed"
 
@@ -192,7 +194,7 @@ def test_timeout_at_parse_stage_marks_failed(tmp_path):
     usecase, _vector_store, metadata_store = _usecase(_Parser("content"), metadata_store=metadata_store)
 
     with pytest.raises(TimeoutError):
-        usecase.execute(job, deadline_monotonic=0.0)
+        asyncio.run(usecase.execute(job, deadline_monotonic=0.0))
 
     assert metadata_store.get_document("doc-timeout-parse").status == "failed"
 
@@ -214,7 +216,7 @@ def test_deadline_respected_after_parse(tmp_path):
     )
 
     with pytest.raises(TimeoutError):
-        usecase.execute(job)
+        asyncio.run(usecase.execute(job))
 
     assert metadata_store.get_document("doc-timeout-split").status == "failed"
 

@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 data/test_store/
 data/local_store/
+data/derived/
+.test_tmp/

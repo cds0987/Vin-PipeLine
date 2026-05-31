@@ -8,6 +8,8 @@ Each failing stage must:
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.application.ingest.index_sections import DocumentIndexService
@@ -47,14 +49,14 @@ class _MinimalSplitter:
 
 
 class _MinimalCaptioner:
-    def caption_sections(self, sections):
+    async def caption_sections(self, sections):
         for section in sections:
             section.caption = section.section_content[:80]
         return sections
 
 
 class _MinimalEmbedder:
-    def embed_sections(self, sections):
+    async def embed_sections(self, sections):
         for section in sections:
             section.embedding = [0.1] * settings.EMBEDDING_DIM
         return sections
@@ -101,7 +103,7 @@ def test_split_stage_exception_marks_failed(tmp_path):
     usecase, metadata_store = _usecase(splitter=_BadSplitter())
 
     with pytest.raises(ValueError, match="splitter broken"):
-        usecase.execute(job)
+        asyncio.run(usecase.execute(job))
 
     assert metadata_store.get_document("split-fail").status == "failed"
 
@@ -112,12 +114,12 @@ def test_caption_stage_exception_marks_failed(tmp_path):
     job = IngestJob(doc_id="caption-fail", file_uri=str(f))
 
     class _BadCaptioner:
-        def caption_sections(self, sections): raise RuntimeError("caption stage exploded")
+        async def caption_sections(self, sections): raise RuntimeError("caption stage exploded")
 
     usecase, metadata_store = _usecase(captioner=_BadCaptioner())
 
     with pytest.raises(RuntimeError, match="caption stage exploded"):
-        usecase.execute(job)
+        asyncio.run(usecase.execute(job))
 
     doc = metadata_store.get_document("caption-fail")
     assert doc is not None
@@ -135,7 +137,7 @@ def test_index_stage_exception_marks_failed(tmp_path):
     usecase, metadata_store = _usecase(index_service=_BadIndexService())
 
     with pytest.raises(IOError, match="qdrant write failed"):
-        usecase.execute(job)
+        asyncio.run(usecase.execute(job))
 
     assert metadata_store.get_document("index-fail").status == "failed"
 
@@ -160,7 +162,7 @@ def test_failed_job_recorded_with_error_message(tmp_path):
     usecase, _metadata_store = _usecase(splitter=_BadSplitter(), metadata_store=metadata_store)
 
     with pytest.raises(RuntimeError):
-        usecase.execute(job)
+        asyncio.run(usecase.execute(job))
 
     failed = [j for j in recorded_jobs if j["status"] == "failed"]
     assert failed, "No failed job recorded"
@@ -178,7 +180,7 @@ def test_try_claim_ingest_skip_returns_skipped_status(tmp_path, monkeypatch):
     repository.try_claim_ingest(job)
 
     usecase, _metadata_store = _usecase(metadata_store=metadata_store)
-    result = usecase.execute(job)
+    result = asyncio.run(usecase.execute(job))
 
     assert result["status"] == "skipped"
     assert result["section_count"] == 0
@@ -196,7 +198,7 @@ def test_try_claim_ingest_skip_does_not_overwrite_indexing_status(tmp_path, monk
     repository.try_claim_ingest(job)
 
     usecase, _metadata_store = _usecase(metadata_store=metadata_store)
-    usecase.execute(job)
+    asyncio.run(usecase.execute(job))
 
     doc = metadata_store.get_document("no-overwrite")
     assert doc.status == "indexing"
