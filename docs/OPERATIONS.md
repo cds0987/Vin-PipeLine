@@ -66,7 +66,8 @@ git push lên main
                 ├── Auth GCP (Workload Identity — không dùng JSON key)
                 ├── Get GKE credentials
                 ├── Apply k8s secret từ GitHub Secrets (tự động)
-                ├── [app đổi] Build image → push Artifact Registry
+                ├── [code HOẶC k8s đổi] Build image → push `:SHA` + `:latest`
+                ├── make deploy SHA=<git-sha> → kustomize pin tag = SHA
                 ├── kubectl apply -k k8s/overlays/production/ (kustomize)
                 └── kubectl rollout status (chờ pods healthy)
 ```
@@ -76,10 +77,27 @@ git push lên main
 | File thay đổi | docker-test | deploy |
 |---|---|---|
 | `docs/`, `tests/`, `scripts/` | ⏭ skip | ⏭ skip |
-| `k8s/**` | ⏭ skip | ✅ apply + restart |
+| `k8s/**` | ⏭ skip | ✅ build + apply + rollout |
 | `api/`, `pipeline/`, `app/`, `docker/`, `requirements.txt`... | ✅ chạy | ✅ build + rollout |
 
 **Không deploy thủ công** — mọi thay đổi đi qua CI khi push lên `main`.
+
+### Image tag pinning — cơ chế bắt buộc đúng (đừng phá)
+
+Mỗi deploy phải tạo ra **một image tag duy nhất theo git SHA** để `kubectl apply` thấy spec thay đổi → trigger rollout → pods mới. Cơ chế:
+
+- `k8s/base/api-deployment.yaml` dùng **placeholder** `image: api` (KHÔNG ghi full path).
+- `k8s/overlays/production/kustomization.yaml` có `images: [{name: api, newName: <registry>/api, newTag: latest}]`.
+- CI chạy `make deploy SHA=<sha>` → `kustomize edit set image api=<registry>/api:<sha>` → render ra `<registry>/api:<sha>` cho cả `initContainer` lẫn `api` container.
+
+**Tại sao quan trọng:** kustomize match image theo `name`. Nếu base ghi full path `<registry>/api:latest` thì `name: api` KHÔNG khớp → substitution là no-op → manifest giữ `:latest` → `kubectl apply` thấy không đổi → **không rollout → production chạy code cũ dù CI xanh**. Đây là lỗi đã xảy ra (xem Debug). Build cũng phải chạy khi `code OR k8s` đổi, nếu không tag `:SHA` chưa tồn tại → ImagePullBackOff.
+
+**Kiểm tra nhanh khi đổi k8s image/overlay** (kustomize không cài local thì dùng `kubectl kustomize`):
+
+```powershell
+kubectl kustomize k8s/overlays/production/ | Select-String "image:"
+# api container PHẢI hiện <registry>/api:<tag>, không phải literal "api"
+```
 
 ---
 
@@ -108,6 +126,25 @@ Invoke-RestMethod http://136.110.29.1/health
 Invoke-RestMethod -Uri "http://136.110.29.1/search" -Method POST `
   -ContentType "application/json" -Body '{"query": "test", "top_k": 5}'
 ```
+
+### Verify SAU deploy — bắt buộc, đừng tin CI xanh là xong
+
+**CI báo `deploy success` KHÔNG đảm bảo code mới đang chạy.** `kubectl rollout status` trả success ngay cả khi không có rollout nào xảy ra (nó chỉ check trạng thái deployment hiện tại). Luôn xác nhận pods thực sự chạy image mới:
+
+```powershell
+# 1. Pods đang dùng image SHA nào?
+kubectl get pods -l app=vin-pipeline-api `
+  -o jsonpath="{.items[*].spec.containers[*].image}"
+# → phải khớp git SHA vừa push, KHÔNG phải :latest hay SHA cũ
+
+# 2. ReplicaSet mới đã được tạo? (rollout thật sự xảy ra)
+kubectl rollout history deployment/vin-pipeline-api
+
+# 3. /health phản ánh code mới (kiểm tra field bạn vừa thêm/đổi)
+Invoke-RestMethod http://136.110.29.1/health
+```
+
+Nếu image SHA không đổi sau deploy → rollout không xảy ra → xem mục Debug "Deploy success nhưng code cũ vẫn chạy".
 
 ---
 
@@ -173,9 +210,29 @@ git add k8s/base/configmap.yaml; git commit -m "Switch AI provider"; git push
 |---|---|
 | **CrashLoopBackOff** | `kubectl describe pod <p>` (xem Events) + `kubectl logs <p> --previous`. Thường: secret sai/thiếu, DB chưa sẵn sàng (tăng `initialDelaySeconds`), OOM (tăng `resources.limits.memory`) |
 | **Pending** | `kubectl describe pod <p>` — thường insufficient resources |
-| **ImagePullBackOff** | `kubectl describe pod <p>` — kiểm tra GKE node SA có `roles/artifactregistry.reader` |
+| **ImagePullBackOff** | `kubectl describe pod <p>`. (a) GKE node SA thiếu `roles/artifactregistry.reader`; HOẶC (b) deploy pin tag `:SHA` chưa được build — đảm bảo step "Build & push image" chạy khi `code OR k8s` đổi (xem Image tag pinning) |
+| **Deploy success nhưng code cũ vẫn chạy** | CI xanh nhưng `/health` / behavior vẫn là code cũ. Nguyên nhân: rollout không xảy ra vì image tag không đổi. Xem cách xử lý bên dưới |
 | **Search trả 500 (dimension mismatch)** | Hiếm gặp vì collection encode dimension. Xem cách xử lý bên dưới |
 | **Secret sai/thiếu** | `kubectl describe pod <p>` tìm "secret not found"; `gh secret set <NAME>`; push k8s/ change để CI apply |
+
+Deploy success nhưng code cũ (silent — nguy hiểm nhất vì CI xanh):
+
+```powershell
+# Triệu chứng: pods chạy image SHA cũ / :latest dù vừa deploy
+kubectl get pods -l app=vin-pipeline-api -o jsonpath="{.items[*].spec.containers[*].image}"
+
+# Nguyên nhân gốc: kustomize không pin được tag → manifest không đổi → no rollout.
+# Kiểm tra render có ra <registry>/api:<sha> không (không phải literal "api" hay :latest):
+kubectl kustomize k8s/overlays/production/ | Select-String "vin-pipeline/api:"
+
+# Điều kiện kustomize hoạt động (cả 2 phải đúng):
+#   - k8s/base/api-deployment.yaml dùng placeholder `image: api`
+#   - overlay images[].name = `api` (khớp placeholder)
+# Nếu base ghi full path .../api:latest → name `api` không khớp → substitution no-op.
+
+# Workaround tức thời (khi cần đẩy :latest mới đã build mà chưa kịp sửa kustomize):
+kubectl rollout restart deployment/vin-pipeline-api   # :latest có imagePullPolicy=Always
+```
 
 Dimension mismatch:
 
