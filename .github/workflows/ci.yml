@@ -154,7 +154,9 @@ jobs:
             S3_BUCKET="${{ secrets.S3_BUCKET }}"
 
       - name: Build & push image
-        if: needs.changes.outputs.code == 'true'
+        # Build whenever we deploy (code OR k8s changes) so the image for this
+        # SHA always exists — `make deploy SHA=...` pins that exact tag.
+        if: needs.changes.outputs.code == 'true' || needs.changes.outputs.k8s == 'true'
         run: |
           gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
           make push SHA=${{ github.sha }}

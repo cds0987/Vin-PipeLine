@@ -22,7 +22,7 @@ spec:
       # If migration fails, the pod will not start → deploy fails safely.
       initContainers:
         - name: db-migrate
-          image: asia-southeast1-docker.pkg.dev/vintravel-chatbot/vin-pipeline/api:latest
+          image: api  # placeholder — kustomize overlay pins newName:newTag (CI sets tag=SHA)
           command: ["alembic", "upgrade", "head"]
           envFrom:
             - configMapRef:
@@ -31,7 +31,7 @@ spec:
                 name: vin-pipeline-secret
       containers:
         - name: api
-          image: asia-southeast1-docker.pkg.dev/vintravel-chatbot/vin-pipeline/api:latest
+          image: api  # placeholder — kustomize overlay pins newName:newTag (CI sets tag=SHA)
           ports:
             - containerPort: 8000
           envFrom:
